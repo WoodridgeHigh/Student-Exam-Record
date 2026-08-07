@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin — Exam Records</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+<style>
+  .tabs { display:flex; gap:6px; margin-bottom: 18px; flex-wrap: wrap; }
+  .tabs button { font-family: inherit; background: transparent; border: 1px solid var(--paper-line); padding: 9px 14px; border-radius: var(--radius); cursor: pointer; font-size: 0.82rem; }
+  .tabs button.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .tabpanel { display: none; }
+  .tabpanel.active { display: block; }
+  .form-row { display:flex; gap:10px; margin-bottom:10px; flex-wrap: wrap; align-items:center; }
+  .form-row input, .form-row select { flex:1; min-width:140px; padding:8px 10px; border:1px solid var(--paper-line); border-radius: var(--radius); font-family:inherit; }
+  .subcard { border:1px solid var(--paper-line); border-radius: var(--radius); padding:14px; margin-bottom:14px; }
+  .checklist label { display:flex; align-items:center; gap:8px; padding:4px 0; font-size:0.88rem; }
+  .test-row { display:flex; justify-content:space-between; align-items:center; padding:10px 6px; border-bottom:1px solid var(--paper-line); }
+  .badge { font-size:0.7rem; padding:2px 8px; border-radius:10px; background: var(--paper-line); color: var(--ink-soft); margin-left:8px; }
+  table.roll input[type="number"], table.roll input[type="text"] { width: 100%; padding:6px 8px; border:1px solid var(--paper-line); border-radius: var(--radius); font-family: inherit; }
+  #printArea { background:#fff; padding:24px; }
+  #printArea table { width:100%; border-collapse: collapse; }
+  #printArea th, #printArea td { border:1px solid #ccc; padding:6px 8px; font-size:0.85rem; text-align:left; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">Exam <span>Records</span> · Admin</div>
+  <div style="display:flex; align-items:center; gap:14px;">
+    <div class="who" id="whoLabel"></div>
+    <button class="link" onclick="changePassword()">Change password</button>
+    <button class="link" onclick="signOut()">Sign out</button>
+  </div>
+</div>
+
+<div class="page">
+  <div class="tabs">
+    <button class="active" data-tab="setup" onclick="showTab('setup')">Setup</button>
+    <button data-tab="ptmarks" onclick="showTab('ptmarks')">PT Max Marks</button>
+    <button data-tab="testsmarks" onclick="showTab('testsmarks')">Tests &amp; Marks</button>
+    <button data-tab="students" onclick="showTab('students')">Students</button>
+    <button data-tab="teachers" onclick="showTab('teachers')">Teachers</button>
+    <button data-tab="reports" onclick="showTab('reports')">Reports</button>
+    <button data-tab="fields" id="fieldsTabBtn" onclick="showTab('fields')" style="display:none;">Fields</button>
+  </div>
+
+  <!-- SETUP -->
+  <div class="tabpanel active" id="tab-setup">
+    <div class="subcard">
+      <h3>Academic years</h3>
+      <div class="form-row">
+        <input id="newYearLabel" placeholder="e.g. 2026-27">
+        <button class="btn small" onclick="initializeYear()">Create year &amp; generate PT-1 to PT-4</button>
+      </div>
+      <p class="hint">Safe to run again for the same year — it only fills in tests that don't already exist. Run this once at the start of each academic year, after your subject list is finalized.</p>
+      <div id="yearsList"></div>
+    </div>
+    <div class="subcard">
+      <h3>Subjects</h3>
+      <div class="form-row">
+        <input id="newSubjectName" placeholder="Subject name">
+        <button class="btn small" onclick="addSubject()">Add</button>
+      </div>
+      <div id="subjectsList"></div>
+    </div>
+    <div class="subcard">
+      <h3>Houses</h3>
+      <div class="form-row">
+        <input id="newHouseName" placeholder="House name">
+        <button class="btn small" onclick="addHouse()">Add</button>
+      </div>
+      <div id="housesList"></div>
+    </div>
+  </div>
+
+  <!-- PT MAX MARKS -->
+  <div class="tabpanel" id="tab-ptmarks">
+    <div class="form-row">
+      <select id="ptYear"></select>
+      <select id="ptSubject"></select>
+      <select id="ptGrade"><option>6</option><option>7</option><option>8</option></select>
+      <select id="ptSection"><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option><option>G</option></select>
+      <button class="btn small secondary" onclick="loadPtMarks()">Load</button>
+    </div>
+    <div class="card" id="ptMarksList"></div>
+  </div>
+
+  <!-- TESTS & MARKS -->
+  <div class="tabpanel" id="tab-testsmarks">
+    <div class="form-row">
+      <select id="tmYear"></select>
+      <select id="tmSubject"></select>
+      <select id="tmGrade"><option>6</option><option>7</option><option>8</option></select>
+      <select id="tmSection"><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option><option>G</option></select>
+      <button class="btn small secondary" onclick="loadAdminTests()">Load</button>
+    </div>
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <h3 style="margin:0;">Tests</h3>
+        <button class="btn small" onclick="document.getElementById('newTestForm').style.display='block'">+ New custom test</button>
+      </div>
+      <div id="newTestForm" style="display:none; margin-bottom:14px;">
+        <div class="form-row">
+          <input id="newTestName" placeholder="Test name">
+          <input id="newTestMax" type="number" placeholder="Max marks">
+          <button class="btn small" onclick="createAdminTest()">Create</button>
+        </div>
+      </div>
+      <div id="adminTestList"></div>
+    </div>
+    <div class="card" id="adminMarksCard" style="display:none;">
+      <h3 id="adminMarksTitle"></h3>
+      <table class="roll" id="adminMarksTable">
+        <thead><tr><th style="width:50px;">#</th><th>Student</th><th style="width:110px;">Marks</th></tr></thead>
+        <tbody id="adminMarksBody"></tbody>
+      </table>
+      <div id="adminMarksBanner"></div>
+      <button class="btn" onclick="submitAdminMarks()">Save marks</button>
+    </div>
+  </div>
+
+  <!-- STUDENTS -->
+  <div class="tabpanel" id="tab-students">
+    <div class="card">
+      <h3>Add one student</h3>
+      <div class="form-row">
+        <input id="stuName" placeholder="Full name">
+        <select id="stuGender"><option value="">Gender</option><option value="M">M</option><option value="F">F</option><option value="Other">Other</option></select>
+        <select id="stuHouse"></select>
+      </div>
+      <div class="form-row">
+        <select id="stuGrade"><option>6</option><option>7</option><option>8</option></select>
+        <select id="stuSection"><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option><option>G</option></select>
+        <button class="btn small" onclick="addStudent()">Add student</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Bulk import via CSV</h3>
+      <p class="hint">Columns, in order: name, gender (M/F/Other), house name, grade, section</p>
+      <input type="file" id="csvFile" accept=".csv">
+      <button class="btn small" onclick="importCsv()">Import CSV</button>
+      <div id="importStatus" class="hint" style="margin-top:8px;"></div>
+    </div>
+    <div class="card">
+      <div class="form-row">
+        <select id="filterGrade"><option value="">All grades</option><option>6</option><option>7</option><option>8</option></select>
+        <select id="filterSection"><option value="">All sections</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option><option>G</option></select>
+        <button class="btn small secondary" onclick="loadStudents()">Filter</button>
+      </div>
+      <div id="studentsList"></div>
+    </div>
+  </div>
+
+  <!-- TEACHERS -->
+  <div class="tabpanel" id="tab-teachers">
+    <div class="card">
+      <h3>Register an account</h3>
+      <div class="form-row">
+        <input id="teachName" placeholder="Full name">
+        <input id="teachUsername" placeholder="Username">
+        <input id="teachPassword" placeholder="Initial password (6+ chars)">
+      </div>
+      <div class="form-row">
+        <select id="teachRole"><option value="teacher">Teacher</option><option value="admin" id="adminRoleOption" style="display:none;">Admin</option></select>
+      </div>
+      <div id="teachAssignmentsBuilder">
+        <p class="hint">Add one or more subject + class combinations this teacher can access:</p>
+        <div class="form-row">
+          <select id="assignSubject"></select>
+          <select id="assignGrade"><option>6</option><option>7</option><option>8</option></select>
+          <select id="assignSection"><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option><option>G</option></select>
+          <button class="btn small secondary" type="button" onclick="addAssignmentToBuilder()">+ Add</button>
+        </div>
+        <div id="assignmentsPreview" class="hint"></div>
+      </div>
+      <button class="btn small" style="margin-top:10px;" onclick="createTeacher()">Create account</button>
+    </div>
+    <div class="card" id="teacherList"></div>
+  </div>
+
+  <!-- REPORTS -->
+  <div class="tabpanel" id="tab-reports">
+    <div class="card">
+      <h3>1. Choose tests to include</h3>
+      <div class="form-row">
+        <select id="repYear"></select>
+        <select id="repSubject"><option value="">Any subject</option></select>
+        <select id="repGrade"><option value="">Any grade</option><option>6</option><option>7</option><option>8</option></select>
+        <select id="repSection"><option value="">Any section</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option><option>G</option></select>
+        <button class="btn small secondary" onclick="loadReportTestOptions()">Load tests</button>
+      </div>
+      <div id="testChecklist" class="checklist"></div>
+    </div>
+
+    <div class="card">
+      <h3>2. Report type</h3>
+      <div class="form-row">
+        <select id="reportType">
+          <option value="leaderboard">Leaderboard (rank by %)</option>
+          <option value="top3">Top 3 per class</option>
+          <option value="classSheet">Class result sheet</option>
+        </select>
+      </div>
+      <div class="form-row" id="leaderboardFilters">
+        <select id="lbGrade"><option value="">All grades</option><option>6</option><option>7</option><option>8</option></select>
+        <select id="lbSection"><option value="">All sections</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option><option>G</option></select>
+        <select id="lbHouse"><option value="">All houses</option></select>
+        <input id="lbLimit" type="number" placeholder="Limit (blank = all)">
+      </div>
+      <div class="form-row" id="classSheetFilters" style="display:none;">
+        <select id="csGrade"><option>6</option><option>7</option><option>8</option></select>
+        <select id="csSection"><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option><option>G</option></select>
+      </div>
+      <button class="btn small" onclick="generateReport()">Generate report</button>
+      <button class="btn small secondary" onclick="exportPdf()">Export as PDF</button>
+    </div>
+
+    <div class="card">
+      <div id="printArea"></div>
+    </div>
+  </div>
+
+  <!-- FIELDS (super admin only) -->
+  <div class="tabpanel" id="tab-fields">
+    <div class="card">
+      <h3>Add a custom student field</h3>
+      <div class="form-row">
+        <input id="fieldKey" placeholder="field_key (no spaces, e.g. blood_group)">
+        <input id="fieldLabel" placeholder="Display label, e.g. Blood Group">
+        <select id="fieldType"><option value="text">Text</option><option value="number">Number</option><option value="date">Date</option><option value="select">Select (dropdown)</option></select>
+      </div>
+      <div class="form-row">
+        <input id="fieldOptions" placeholder="For Select type only: comma-separated options">
+        <button class="btn small" onclick="addField()">Add field</button>
+      </div>
+      <p class="hint">Once added, the field appears automatically on the Students tab for admins to fill in.</p>
+    </div>
+    <div class="card" id="fieldsList"></div>
+  </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/supabaseClient.js"></script>
+<script src="js/admin.js"></script>
+</body>
+</html>

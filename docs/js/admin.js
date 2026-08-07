@@ -1,0 +1,553 @@
+let profile, subjects = [], houses = [], years = [], fieldDefs = [], pendingAssignments = [];
+
+async function signOut() {
+  await Auth.logout();
+  window.location.href = 'index.html';
+}
+
+async function changePassword() {
+  const oldPassword = window.prompt('Enter your current password:');
+  if (!oldPassword) return;
+  const newPassword = window.prompt('Enter a new password (6+ characters):');
+  if (!newPassword) return;
+  const res = await Auth.changePassword(oldPassword, newPassword);
+  if (!res.ok) { alert(res.error); return; }
+  alert('Password updated.');
+}
+
+function showTab(name) {
+  document.querySelectorAll('.tabpanel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+  document.getElementById(`tab-${name}`).classList.add('active');
+  document.querySelector(`.tabs button[data-tab="${name}"]`).classList.add('active');
+  if (name === 'teachers') loadTeachers();
+  if (name === 'students') loadStudents();
+  if (name === 'fields') loadFields();
+}
+
+// ── SHARED DATA (subjects, houses, years, field definitions) ───────────
+
+async function loadSharedData() {
+  const [{ data: subjData }, { data: houseData }, { data: yearData }, { data: fieldData }] = await Promise.all([
+    sb.from('subjects').select('*').order('name'),
+    sb.from('houses').select('*').order('name'),
+    sb.from('academic_years').select('*').order('label', { ascending: false }),
+    sb.from('field_definitions').select('*').order('created_at')
+  ]);
+  subjects = subjData || [];
+  houses = houseData || [];
+  years = yearData || [];
+  fieldDefs = fieldData || [];
+
+  const subjectOptions = subjects.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+  const yearOptions = years.map(y => `<option value="${y.id}" ${y.is_current ? 'selected' : ''}>${y.label}</option>`).join('');
+  const houseOptions = houses.map(h => `<option value="${h.id}">${h.name}</option>`).join('');
+
+  ['ptSubject', 'tmSubject', 'assignSubject'].forEach(id => document.getElementById(id).innerHTML = subjectOptions);
+  ['ptYear', 'tmYear', 'repYear'].forEach(id => document.getElementById(id).innerHTML = yearOptions);
+  document.getElementById('repSubject').innerHTML += subjectOptions;
+  document.getElementById('stuHouse').innerHTML = '<option value="">No house</option>' + houseOptions;
+  document.getElementById('lbHouse').innerHTML += houseOptions;
+
+  renderSetupLists();
+}
+
+// ── SETUP TAB ────────────────────────────────────────────────────────────
+
+function renderSetupLists() {
+  document.getElementById('yearsList').innerHTML = years.map(y => `
+    <div class="test-row">
+      <div>${y.label} ${y.is_current ? '<span class="badge">Current</span>' : ''}</div>
+      ${!y.is_current ? `<button class="btn small secondary" onclick="setCurrentYear('${y.id}')">Set as current</button>` : ''}
+    </div>`).join('') || '<p class="hint">No academic years yet.</p>';
+
+  document.getElementById('subjectsList').innerHTML = subjects.map(s => `<div class="test-row"><div>${s.name}</div></div>`).join('') || '<p class="hint">No subjects yet — add some above before initializing a year.</p>';
+  document.getElementById('housesList').innerHTML = houses.map(h => `<div class="test-row"><div>${h.name}</div></div>`).join('') || '<p class="hint">No houses yet.</p>';
+}
+
+async function addSubject() {
+  const name = document.getElementById('newSubjectName').value.trim();
+  if (!name) return;
+  const { error } = await sb.from('subjects').insert({ name });
+  if (error) { alert(error.message); return; }
+  document.getElementById('newSubjectName').value = '';
+  await loadSharedData();
+}
+
+async function addHouse() {
+  const name = document.getElementById('newHouseName').value.trim();
+  if (!name) return;
+  const { error } = await sb.from('houses').insert({ name });
+  if (error) { alert(error.message); return; }
+  document.getElementById('newHouseName').value = '';
+  await loadSharedData();
+}
+
+async function setCurrentYear(yearId) {
+  await sb.from('academic_years').update({ is_current: false }).neq('id', yearId);
+  const { error } = await sb.from('academic_years').update({ is_current: true }).eq('id', yearId);
+  if (error) { alert(error.message); return; }
+  await loadSharedData();
+}
+
+async function initializeYear() {
+  const label = document.getElementById('newYearLabel').value.trim();
+  if (!label) { alert('Enter a year label, e.g. 2026-27'); return; }
+  if (!subjects.length) { alert('Add at least one subject first.'); return; }
+  const { data, error } = await sb.rpc('initialize_academic_year', { p_label: label });
+  if (error) { alert(error.message); return; }
+  alert(`Done — ${data.testsCreated} PT test rows created (existing ones were left untouched).`);
+  document.getElementById('newYearLabel').value = '';
+  await loadSharedData();
+}
+
+// ── PT MAX MARKS TAB ─────────────────────────────────────────────────────
+
+async function loadPtMarks() {
+  const year = document.getElementById('ptYear').value;
+  const subject = document.getElementById('ptSubject').value;
+  const grade = document.getElementById('ptGrade').value;
+  const section = document.getElementById('ptSection').value;
+  const listEl = document.getElementById('ptMarksList');
+  if (!year || !subject) { listEl.innerHTML = '<p class="hint">Pick a year and subject.</p>'; return; }
+
+  const { data, error } = await sb.from('tests').select('*')
+    .eq('academic_year_id', year).eq('subject_id', subject).eq('grade', grade).eq('section', section)
+    .eq('is_predefined', true).order('pt_number');
+  if (error) { listEl.innerHTML = `<div class="status-banner warn">${error.message}</div>`; return; }
+  if (!data.length) { listEl.innerHTML = '<p class="hint">No PT tests found — initialize this academic year first (Setup tab).</p>'; return; }
+
+  listEl.innerHTML = data.map(t => `
+    <div class="test-row">
+      <div>${t.name} ${t.is_locked ? '<span class="badge">Locked</span>' : ''}</div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <input type="number" id="pt-max-${t.id}" value="${t.max_marks ?? ''}" ${t.is_locked ? 'disabled' : ''} style="width:90px; padding:6px 8px; border:1px solid var(--paper-line); border-radius:3px;">
+        <button class="btn small" onclick="savePtMax('${t.id}')" ${t.is_locked ? 'disabled' : ''}>Save</button>
+        <button class="btn small secondary" onclick="toggleLock('${t.id}', ${!t.is_locked})">${t.is_locked ? 'Unlock' : 'Lock'}</button>
+      </div>
+    </div>`).join('');
+}
+
+async function savePtMax(testId) {
+  const value = parseFloat(document.getElementById(`pt-max-${testId}`).value);
+  if (isNaN(value)) { alert('Enter a number'); return; }
+  const { error } = await sb.rpc('set_pt_max_marks', { p_test_id: testId, p_max_marks: value });
+  if (error) { alert(error.message); return; }
+  loadPtMarks();
+}
+
+async function toggleLock(testId, lock) {
+  const { error } = await sb.rpc('set_test_lock', { p_test_id: testId, p_locked: lock });
+  if (error) { alert(error.message); return; }
+  loadPtMarks();
+}
+
+// ── TESTS & MARKS TAB (admin — any class) ────────────────────────────────
+
+let adminCurrentTests = [], adminCurrentTest = null, adminCurrentStudents = [];
+
+async function loadAdminTests() {
+  const year = document.getElementById('tmYear').value;
+  const subject = document.getElementById('tmSubject').value;
+  const grade = document.getElementById('tmGrade').value;
+  const section = document.getElementById('tmSection').value;
+  document.getElementById('adminMarksCard').style.display = 'none';
+
+  const { data, error } = await sb.from('tests').select('*')
+    .eq('academic_year_id', year).eq('subject_id', subject).eq('grade', grade).eq('section', section)
+    .order('is_predefined', { ascending: false }).order('pt_number').order('name');
+  const listEl = document.getElementById('adminTestList');
+  if (error) { listEl.innerHTML = `<div class="status-banner warn">${error.message}</div>`; return; }
+
+  adminCurrentTests = data;
+  if (!data.length) { listEl.innerHTML = '<div class="empty-state">No tests yet for this selection.</div>'; return; }
+
+  listEl.innerHTML = data.map(t => `
+    <div class="test-row">
+      <div>${t.name}${t.is_predefined ? '<span class="badge">Predefined</span>' : ''}${t.is_locked ? '<span class="badge">Locked</span>' : ''}
+        <div class="hint">Max marks: ${t.max_marks ?? '— not set'}</div>
+      </div>
+      <div style="display:flex; gap:6px;">
+        ${!t.is_predefined ? `<button class="btn small secondary" onclick="editAdminTest('${t.id}')">Edit</button>` : ''}
+        <button class="btn small secondary" onclick="openAdminMarksEntry('${t.id}')" ${t.max_marks == null ? 'disabled' : ''}>Enter marks</button>
+      </div>
+    </div>`).join('');
+}
+
+async function createAdminTest() {
+  const name = document.getElementById('newTestName').value.trim();
+  const maxMarks = parseFloat(document.getElementById('newTestMax').value);
+  if (!name || !maxMarks) { alert('Enter a test name and max marks'); return; }
+  const { error } = await sb.rpc('create_test', {
+    p_name: name,
+    p_subject_id: document.getElementById('tmSubject').value,
+    p_grade: document.getElementById('tmGrade').value,
+    p_section: document.getElementById('tmSection').value,
+    p_academic_year_id: document.getElementById('tmYear').value,
+    p_max_marks: maxMarks
+  });
+  if (error) { alert(error.message); return; }
+  document.getElementById('newTestForm').style.display = 'none';
+  document.getElementById('newTestName').value = '';
+  document.getElementById('newTestMax').value = '';
+  loadAdminTests();
+}
+
+async function editAdminTest(testId) {
+  const t = adminCurrentTests.find(x => x.id === testId);
+  const name = window.prompt('Test name:', t.name);
+  if (!name) return;
+  const maxMarks = parseFloat(window.prompt('Max marks:', t.max_marks));
+  if (isNaN(maxMarks)) return;
+  const { error } = await sb.rpc('update_test', { p_test_id: testId, p_name: name, p_max_marks: maxMarks });
+  if (error) { alert(error.message); return; }
+  loadAdminTests();
+}
+
+async function openAdminMarksEntry(testId) {
+  adminCurrentTest = adminCurrentTests.find(t => t.id === testId);
+  const { data: students, error } = await sb.from('students').select('id, name')
+    .eq('grade', adminCurrentTest.grade).eq('section', adminCurrentTest.section).eq('active', true).order('name');
+  if (error) { alert(error.message); return; }
+  adminCurrentStudents = students;
+
+  const { data: marks } = await sb.from('marks').select('student_id, marks_obtained').eq('test_id', testId);
+  const marksByStudent = {};
+  (marks || []).forEach(m => { marksByStudent[m.student_id] = m.marks_obtained; });
+
+  document.getElementById('adminMarksTitle').textContent = `${adminCurrentTest.name} — Grade ${adminCurrentTest.grade}-${adminCurrentTest.section} (max ${adminCurrentTest.max_marks})`;
+  document.getElementById('adminMarksBanner').innerHTML = '';
+  document.getElementById('adminMarksBody').innerHTML = students.map((s, i) => `
+    <tr>
+      <td class="roll-no mono">${i + 1}</td>
+      <td>${s.name}</td>
+      <td><input type="number" min="0" max="${adminCurrentTest.max_marks}" step="0.5" id="amarks-${s.id}" value="${marksByStudent[s.id] ?? ''}"></td>
+    </tr>`).join('');
+  document.getElementById('adminMarksCard').style.display = 'block';
+  document.getElementById('adminMarksCard').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function submitAdminMarks() {
+  const records = {};
+  for (const s of adminCurrentStudents) {
+    const val = document.getElementById(`amarks-${s.id}`).value;
+    if (val !== '') records[s.id] = parseFloat(val);
+  }
+  const { data, error } = await sb.rpc('submit_marks', { p_test_id: adminCurrentTest.id, p_records: records });
+  const banner = document.getElementById('adminMarksBanner');
+  banner.innerHTML = error
+    ? `<div class="status-banner warn">${error.message}</div>`
+    : `<div class="status-banner ok">Saved marks for ${data.saved} students.</div>`;
+}
+
+// ── STUDENTS TAB ──────────────────────────────────────────────────────────
+
+async function addStudent() {
+  const student = {
+    name: document.getElementById('stuName').value.trim(),
+    gender: document.getElementById('stuGender').value || null,
+    house_id: document.getElementById('stuHouse').value || null,
+    grade: document.getElementById('stuGrade').value,
+    section: document.getElementById('stuSection').value
+  };
+  if (!student.name) { alert('Enter a student name'); return; }
+  const { error } = await sb.from('students').insert(student);
+  if (error) { alert(error.message); return; }
+  document.getElementById('stuName').value = '';
+  alert('Student added.');
+  loadStudents();
+}
+
+function parseCsvLine(line) {
+  return line.split(',').map(c => c.trim().replace(/^"|"$/g, ''));
+}
+
+async function importCsv() {
+  const fileInput = document.getElementById('csvFile');
+  const status = document.getElementById('importStatus');
+  if (!fileInput.files.length) { status.textContent = 'Choose a CSV file first.'; return; }
+
+  const text = await fileInput.files[0].text();
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  const houseByName = {};
+  houses.forEach(h => { houseByName[h.name.toLowerCase()] = h.id; });
+
+  let unmatchedHouses = 0;
+  const rows = lines
+    .map(parseCsvLine)
+    .filter(c => c[0] && c[0].toLowerCase() !== 'name')
+    .map(c => {
+      const houseId = houseByName[(c[2] || '').toLowerCase()] || null;
+      if (c[2] && !houseId) unmatchedHouses++;
+      return { name: c[0], gender: c[1] || null, house_id: houseId, grade: c[3], section: c[4] };
+    });
+
+  if (!rows.length) { status.textContent = 'No valid rows found.'; return; }
+  status.textContent = `Importing ${rows.length} students…`;
+  const { error } = await sb.from('students').insert(rows);
+  if (error) { status.textContent = error.message; return; }
+  status.textContent = `Imported ${rows.length} students.` + (unmatchedHouses ? ` (${unmatchedHouses} had a house name that didn't match any existing house — added without a house.)` : '');
+  fileInput.value = '';
+  loadStudents();
+}
+
+async function loadStudents() {
+  const grade = document.getElementById('filterGrade').value;
+  const section = document.getElementById('filterSection').value;
+  let query = sb.from('students').select('*, houses(name)').eq('active', true).order('grade').order('section').order('name');
+  if (grade) query = query.eq('grade', grade);
+  if (section) query = query.eq('section', section);
+  const { data, error } = await query;
+  const listEl = document.getElementById('studentsList');
+  if (error) { listEl.innerHTML = `<div class="status-banner warn">${error.message}</div>`; return; }
+
+  const extraCols = fieldDefs.map(f => `<th>${f.label}</th>`).join('');
+  listEl.innerHTML = `
+    <table class="roll">
+      <thead><tr><th>Name</th><th>Gender</th><th>House</th><th>Class</th>${extraCols}<th></th></tr></thead>
+      <tbody>
+        ${data.map(s => `
+          <tr>
+            <td>${s.name}</td>
+            <td>${s.gender || '—'}</td>
+            <td>${s.houses ? s.houses.name : '—'}</td>
+            <td>${s.grade}-${s.section}</td>
+            ${fieldDefs.map(f => `<td>${(s.extra_fields || {})[f.field_key] ?? '—'}</td>`).join('')}
+            <td>
+              <button class="btn small secondary" onclick="editStudent('${s.id}')">Edit</button>
+              ${fieldDefs.length ? `<button class="btn small secondary" onclick="editStudentFields('${s.id}')">Fields</button>` : ''}
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table>` || '<p class="hint">No students found.</p>';
+}
+
+async function editStudent(studentId) {
+  const name = window.prompt('Name:');
+  const updates = {};
+  if (name) updates.name = name;
+  const grade = window.prompt('Grade (leave blank to skip):');
+  if (grade) updates.grade = grade;
+  const section = window.prompt('Section (leave blank to skip):');
+  if (section) updates.section = section;
+  if (!Object.keys(updates).length) return;
+  const { error } = await sb.from('students').update(updates).eq('id', studentId);
+  if (error) { alert(error.message); return; }
+  loadStudents();
+}
+
+async function editStudentFields(studentId) {
+  const { data: student } = await sb.from('students').select('extra_fields').eq('id', studentId).single();
+  const extra = { ...(student?.extra_fields || {}) };
+  for (const f of fieldDefs) {
+    const current = extra[f.field_key] ?? '';
+    const val = window.prompt(`${f.label}${f.field_type === 'select' ? ' (' + (f.options || []).join(', ') + ')' : ''}:`, current);
+    if (val !== null) extra[f.field_key] = val;
+  }
+  const { error } = await sb.from('students').update({ extra_fields: extra }).eq('id', studentId);
+  if (error) { alert(error.message); return; }
+  loadStudents();
+}
+
+// ── TEACHERS TAB ──────────────────────────────────────────────────────────
+
+function addAssignmentToBuilder() {
+  const subjectId = document.getElementById('assignSubject').value;
+  const subjectName = subjects.find(s => s.id === subjectId)?.name || '';
+  const grade = document.getElementById('assignGrade').value;
+  const section = document.getElementById('assignSection').value;
+  pendingAssignments.push({ subjectId, subjectName, grade, section });
+  renderAssignmentsPreview();
+}
+
+function removeAssignmentFromBuilder(idx) {
+  pendingAssignments.splice(idx, 1);
+  renderAssignmentsPreview();
+}
+
+function renderAssignmentsPreview() {
+  document.getElementById('assignmentsPreview').innerHTML = pendingAssignments.map((a, i) =>
+    `${a.subjectName} — Grade ${a.grade}-${a.section} <button class="link" onclick="removeAssignmentFromBuilder(${i})">remove</button>`
+  ).join('<br>');
+}
+
+async function createTeacher() {
+  const payload = {
+    name: document.getElementById('teachName').value.trim(),
+    username: document.getElementById('teachUsername').value.trim(),
+    password: document.getElementById('teachPassword').value,
+    role: document.getElementById('teachRole').value,
+    assignments: pendingAssignments.map(a => ({ subjectId: a.subjectId, grade: a.grade, section: a.section }))
+  };
+  if (!payload.name || !payload.username || !payload.password) { alert('Enter name, username, and password'); return; }
+  const res = await Auth.callAdminAction('createTeacher', payload);
+  if (!res.ok) { alert(res.error); return; }
+  document.getElementById('teachName').value = '';
+  document.getElementById('teachUsername').value = '';
+  document.getElementById('teachPassword').value = '';
+  pendingAssignments = [];
+  renderAssignmentsPreview();
+  loadTeachers();
+}
+
+async function resetTeacherPassword(username) {
+  const newPassword = window.prompt(`New password for "${username}" (6+ characters):`);
+  if (!newPassword) return;
+  const res = await Auth.callAdminAction('resetPassword', { username, newPassword });
+  if (!res.ok) { alert(res.error); return; }
+  alert(`Password reset for ${username}.`);
+}
+
+async function loadTeachers() {
+  const el = document.getElementById('teacherList');
+  const { data: profiles, error } = await sb.from('profiles').select('*').order('role').order('name');
+  if (error) { el.innerHTML = `<div class="status-banner warn">${error.message}</div>`; return; }
+
+  const { data: assignData } = await sb.from('teacher_assignments').select('teacher_id, grade, section, subjects(name)');
+  const assignByTeacher = {};
+  (assignData || []).forEach(a => {
+    (assignByTeacher[a.teacher_id] ??= []).push(`${a.subjects.name} ${a.grade}-${a.section}`);
+  });
+
+  el.innerHTML = `
+    <table class="roll">
+      <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Classes</th><th></th></tr></thead>
+      <tbody>
+        ${profiles.map(p => `
+          <tr>
+            <td>${p.name}</td>
+            <td class="mono">${p.username}</td>
+            <td>${p.role}</td>
+            <td>${(assignByTeacher[p.id] || []).join(', ') || '—'}</td>
+            <td><button class="btn small secondary" onclick="resetTeacherPassword('${p.username}')">Reset password</button></td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+// ── REPORTS TAB ──────────────────────────────────────────────────────────
+
+let reportTestOptions = [];
+
+async function loadReportTestOptions() {
+  const year = document.getElementById('repYear').value;
+  const subject = document.getElementById('repSubject').value;
+  const grade = document.getElementById('repGrade').value;
+  const section = document.getElementById('repSection').value;
+  let query = sb.from('tests').select('*, subjects(name)').eq('academic_year_id', year)
+    .order('grade').order('section').order('is_predefined', { ascending: false }).order('pt_number').order('name');
+  if (subject) query = query.eq('subject_id', subject);
+  if (grade) query = query.eq('grade', grade);
+  if (section) query = query.eq('section', section);
+  const { data, error } = await query;
+  const el = document.getElementById('testChecklist');
+  if (error) { el.innerHTML = `<div class="status-banner warn">${error.message}</div>`; return; }
+
+  reportTestOptions = data;
+  el.innerHTML = data.map(t => `
+    <label><input type="checkbox" value="${t.id}" class="testCheckbox"> ${t.subjects.name} — Grade ${t.grade}-${t.section} — ${t.name}</label>
+  `).join('') || '<p class="hint">No tests found for this selection.</p>';
+}
+
+function selectedTestIds() {
+  return Array.from(document.querySelectorAll('.testCheckbox:checked')).map(cb => cb.value);
+}
+
+document.addEventListener('change', (e) => {
+  if (e.target.id === 'reportType') {
+    document.getElementById('leaderboardFilters').style.display = ['leaderboard', 'top3'].includes(e.target.value) ? 'flex' : 'none';
+    document.getElementById('classSheetFilters').style.display = e.target.value === 'classSheet' ? 'flex' : 'none';
+  }
+});
+
+async function generateReport() {
+  const testIds = selectedTestIds();
+  if (!testIds.length) { alert('Select at least one test.'); return; }
+  const type = document.getElementById('reportType').value;
+  const printArea = document.getElementById('printArea');
+
+  if (type === 'leaderboard') {
+    const { data, error } = await sb.rpc('get_leaderboard', {
+      p_test_ids: testIds,
+      p_grade: document.getElementById('lbGrade').value || null,
+      p_section: document.getElementById('lbSection').value || null,
+      p_house_id: document.getElementById('lbHouse').value || null,
+      p_limit: document.getElementById('lbLimit').value ? parseInt(document.getElementById('lbLimit').value) : null
+    });
+    if (error) { printArea.innerHTML = `<div class="status-banner warn">${error.message}</div>`; return; }
+    printArea.innerHTML = `<h3>Leaderboard</h3><table><thead><tr><th>#</th><th>Name</th><th>Class</th><th>House</th><th>Marks</th><th>%</th></tr></thead><tbody>
+      ${data.map((r, i) => `<tr><td>${i + 1}</td><td>${r.name}</td><td>${r.grade}-${r.section}</td><td>${r.house_name || '—'}</td><td>${r.total_obtained}/${r.total_max}</td><td>${r.percentage}</td></tr>`).join('')}
+    </tbody></table>`;
+
+  } else if (type === 'top3') {
+    const { data, error } = await sb.rpc('get_top_n_per_class', { p_test_ids: testIds, p_top_n: 3 });
+    if (error) { printArea.innerHTML = `<div class="status-banner warn">${error.message}</div>`; return; }
+    printArea.innerHTML = `<h3>Top 3 per class</h3><table><thead><tr><th>Class</th><th>Rank</th><th>Name</th><th>Marks</th><th>%</th></tr></thead><tbody>
+      ${data.map(r => `<tr><td>${r.grade}-${r.section}</td><td>${r.rank}</td><td>${r.name}</td><td>${r.total_obtained}/${r.total_max}</td><td>${r.percentage}</td></tr>`).join('')}
+    </tbody></table>`;
+
+  } else if (type === 'classSheet') {
+    const grade = document.getElementById('csGrade').value;
+    const section = document.getElementById('csSection').value;
+    const { data, error } = await sb.rpc('get_class_result_sheet', { p_test_ids: testIds, p_grade: grade, p_section: section });
+    if (error) { printArea.innerHTML = `<div class="status-banner warn">${error.message}</div>`; return; }
+
+    const testNames = [...new Set(data.map(r => r.test_name + ' (' + r.subject_name + ')'))];
+    const byStudent = {};
+    data.forEach(r => {
+      (byStudent[r.student_name] ??= {})[r.test_name + ' (' + r.subject_name + ')'] = r.marks_obtained ?? '—';
+    });
+    printArea.innerHTML = `<h3>Class Result Sheet — Grade ${grade}-${section}</h3><table><thead><tr><th>Student</th>${testNames.map(n => `<th>${n}</th>`).join('')}</tr></thead><tbody>
+      ${Object.keys(byStudent).map(name => `<tr><td>${name}</td>${testNames.map(n => `<td>${byStudent[name][n] ?? '—'}</td>`).join('')}</tr>`).join('')}
+    </tbody></table>`;
+  }
+}
+
+function exportPdf() {
+  const el = document.getElementById('printArea');
+  if (!el.innerHTML.trim()) { alert('Generate a report first.'); return; }
+  html2pdf().from(el).set({ margin: 10, filename: 'report.pdf' }).save();
+}
+
+// ── FIELDS TAB (super admin only) ────────────────────────────────────────
+
+async function addField() {
+  const key = document.getElementById('fieldKey').value.trim();
+  const label = document.getElementById('fieldLabel').value.trim();
+  const type = document.getElementById('fieldType').value;
+  const optionsRaw = document.getElementById('fieldOptions').value.trim();
+  const options = type === 'select' && optionsRaw ? optionsRaw.split(',').map(o => o.trim()) : null;
+  if (!key || !label) { alert('Enter a field key and label'); return; }
+
+  const { error } = await sb.rpc('add_field_definition', { p_field_key: key, p_label: label, p_field_type: type, p_options: options });
+  if (error) { alert(error.message); return; }
+  document.getElementById('fieldKey').value = '';
+  document.getElementById('fieldLabel').value = '';
+  document.getElementById('fieldOptions').value = '';
+  await loadSharedData();
+  loadFields();
+}
+
+function loadFields() {
+  document.getElementById('fieldsList').innerHTML = fieldDefs.map(f => `
+    <div class="test-row"><div>${f.label} <span class="hint">(${f.field_type})</span></div></div>
+  `).join('') || '<p class="hint">No custom fields yet.</p>';
+}
+
+// ── INIT ────────────────────────────────────────────────────────────────
+
+window.onload = async () => {
+  const auth = await Auth.requireOrRedirect();
+  if (!auth) return;
+  profile = auth.profile;
+  if (profile.role === 'teacher') { window.location.href = 'teacher.html'; return; }
+
+  document.getElementById('whoLabel').textContent = `${profile.name} (${profile.role})`;
+
+  if (profile.role === 'super_admin') {
+    document.getElementById('fieldsTabBtn').style.display = 'inline-block';
+    document.getElementById('adminRoleOption').style.display = 'block';
+  }
+
+  await loadSharedData();
+};

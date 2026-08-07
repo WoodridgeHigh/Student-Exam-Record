@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Classes — Exam Records</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+<style>
+  .form-row { display:flex; gap:10px; margin-bottom:10px; flex-wrap: wrap; align-items:center; }
+  .form-row select, .form-row input { padding:8px 10px; border:1px solid var(--paper-line); border-radius: var(--radius); font-family:inherit; }
+  table.roll input[type="number"] { width: 90px; padding:6px 8px; border:1px solid var(--paper-line); border-radius: var(--radius); font-family: inherit; }
+  .test-row { display:flex; justify-content:space-between; align-items:center; padding:10px 6px; border-bottom:1px solid var(--paper-line); }
+  .test-row .badge { font-size:0.7rem; padding:2px 8px; border-radius:10px; background: var(--paper-line); color: var(--ink-soft); margin-left:8px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">Exam <span>Records</span></div>
+  <div style="display:flex; align-items:center; gap:14px;">
+    <div class="who" id="whoLabel"></div>
+    <button class="link" onclick="changePassword()">Change password</button>
+    <button class="link" onclick="signOut()">Sign out</button>
+  </div>
+</div>
+
+<div class="page">
+  <h2 class="display">My Classes</h2>
+
+  <div class="form-row">
+    <label class="hint">Class</label>
+    <select id="assignmentPicker"></select>
+    <label class="hint">Academic year</label>
+    <select id="yearPicker"></select>
+  </div>
+
+  <div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <h3 style="margin:0;">Tests</h3>
+      <button class="btn small" onclick="showNewTestForm()">+ New test</button>
+    </div>
+    <div id="newTestForm" style="display:none; margin-bottom:14px;">
+      <div class="form-row">
+        <input id="newTestName" placeholder="Test name, e.g. Unit Test 1">
+        <input id="newTestMax" type="number" placeholder="Max marks">
+        <button class="btn small" onclick="createTest()">Create</button>
+        <button class="btn small secondary" onclick="document.getElementById('newTestForm').style.display='none'">Cancel</button>
+      </div>
+    </div>
+    <div id="testList"></div>
+  </div>
+
+  <div class="card" id="marksCard" style="display:none;">
+    <h3 id="marksTitle"></h3>
+    <div class="summary-bar"><span class="hint" id="maxMarksHint"></span></div>
+    <table class="roll" id="marksTable">
+      <thead><tr><th style="width:50px;">#</th><th>Student</th><th style="width:110px;">Marks</th></tr></thead>
+      <tbody id="marksBody"></tbody>
+    </table>
+    <div id="marksBanner"></div>
+    <button class="btn" onclick="submitMarks()">Save marks</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="js/config.js"></script>
+<script src="js/supabaseClient.js"></script>
+<script src="js/teacher.js"></script>
+</body>
+</html>
