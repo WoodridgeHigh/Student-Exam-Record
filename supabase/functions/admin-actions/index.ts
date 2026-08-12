@@ -48,11 +48,19 @@ serve(async (req) => {
       return json({ ok: false, error: "Admin access required" }, 403);
     }
 
+    // Account creation and password resets are super_admin-only now — the
+    // Teachers tab is hidden from regular admins in the UI, and this is the
+    // matching server-side rule so that restriction actually holds even if
+    // someone calls the function directly.
+    const requireSuperAdmin = () => callerProfile.role === "super_admin";
+
     const admin = createClient(supabaseUrl, serviceKey);
     const body = await req.json();
 
     if (body.action === "createTeacher") {
-      const { username, password, name, role, grade, section } = body;
+      if (!requireSuperAdmin()) return json({ ok: false, error: "Only the super admin can create accounts" }, 403);
+
+      const { username, password, name, role } = body;
       if (!username || !password || !name || !role) {
         return json({ ok: false, error: "Missing required fields" });
       }
@@ -61,9 +69,6 @@ serve(async (req) => {
       }
       if (role === "super_admin") {
         return json({ ok: false, error: "Super admin can't be created here — only one is allowed, set up during initial bootstrap." });
-      }
-      if (role === "admin" && callerProfile.role !== "super_admin") {
-        return json({ ok: false, error: "Only the super admin can create admin accounts" }, 403);
       }
       if (!["teacher", "admin"].includes(role)) {
         return json({ ok: false, error: "Invalid role" });
@@ -102,15 +107,14 @@ serve(async (req) => {
     }
 
     if (body.action === "resetPassword") {
+      if (!requireSuperAdmin()) return json({ ok: false, error: "Only the super admin can reset passwords" }, 403);
+
       const { username, newPassword } = body;
       if (!username || !newPassword) return json({ ok: false, error: "Missing username or new password" });
       if (newPassword.length < 6) return json({ ok: false, error: "Password must be at least 6 characters" });
 
       const { data: prof } = await admin.from("profiles").select("id, role").eq("username", username.toLowerCase().trim()).single();
       if (!prof) return json({ ok: false, error: "No such username" });
-      if (prof.role === "admin" && callerProfile.role !== "super_admin") {
-        return json({ ok: false, error: "Only the super admin can reset an admin's password" }, 403);
-      }
 
       const { error } = await admin.auth.admin.updateUserById(prof.id, { password: newPassword });
       if (error) return json({ ok: false, error: error.message });

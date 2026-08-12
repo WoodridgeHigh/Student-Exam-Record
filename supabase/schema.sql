@@ -24,6 +24,16 @@ create table subjects (
   name text unique not null
 );
 
+-- Which grade+section classes take each subject. A subject's PT-1..PT-4
+-- tests (see initialize_academic_year below) are only auto-created for the
+-- classes listed here — subjects no longer implicitly apply everywhere.
+create table subject_classes (
+  subject_id uuid not null references subjects(id) on delete cascade,
+  grade text not null,
+  section text not null,
+  primary key (subject_id, grade, section)
+);
+
 create table houses (
   id uuid primary key default gen_random_uuid(),
   name text unique not null
@@ -94,6 +104,7 @@ create table marks (
   test_id uuid not null references tests(id) on delete cascade,
   student_id uuid not null references students(id) on delete cascade,
   marks_obtained numeric,
+  is_absent boolean not null default false,
   entered_by uuid references profiles(id),
   entered_at timestamptz not null default now(),
   unique (test_id, student_id)
@@ -144,6 +155,7 @@ $$;
 
 alter table profiles enable row level security;
 alter table subjects enable row level security;
+alter table subject_classes enable row level security;
 alter table houses enable row level security;
 alter table academic_years enable row level security;
 alter table teacher_assignments enable row level security;
@@ -157,11 +169,12 @@ alter table marks enable row level security;
 create policy "profiles read" on profiles
   for select using (auth.uid() = id or is_admin_or_above());
 
--- subjects / houses / academic_years: readable by any signed-in user
--- (needed for dropdowns everywhere), writable by admin/super_admin.
+-- subjects: readable by any signed-in user (needed for dropdowns
+-- everywhere). Writes only via create_subject/update_subject/delete_subject
+-- below (security definer, super_admin-only) — no direct write policy.
 create policy "subjects read" on subjects for select using (auth.uid() is not null);
-create policy "subjects write" on subjects for insert with check (is_admin_or_above());
-create policy "subjects update" on subjects for update using (is_admin_or_above());
+
+create policy "subject_classes read" on subject_classes for select using (auth.uid() is not null);
 
 create policy "houses read" on houses for select using (auth.uid() is not null);
 create policy "houses write" on houses for insert with check (is_admin_or_above());
@@ -227,9 +240,8 @@ set search_path = public
 as $$
 declare
   v_year_id uuid;
-  v_grade text;
-  v_section text;
   v_subject record;
+  v_class record;
   v_pt int;
   v_created int := 0;
   v_rows int;
@@ -240,16 +252,14 @@ begin
     on conflict (label) do nothing;
   select id into v_year_id from academic_years where label = p_label;
 
-  foreach v_grade in array array['6', '7', '8'] loop
-    foreach v_section in array array['A', 'B', 'C', 'D', 'E', 'F', 'G'] loop
-      for v_subject in select id from subjects loop
-        for v_pt in 1..4 loop
-          insert into tests (name, subject_id, grade, section, academic_year_id, is_predefined, pt_number)
-          values ('PT-' || v_pt, v_subject.id, v_grade, v_section, v_year_id, true, v_pt)
-          on conflict (subject_id, grade, section, academic_year_id, name) do nothing;
-          get diagnostics v_rows = row_count;
-          v_created := v_created + v_rows;
-        end loop;
+  for v_subject in select id from subjects loop
+    for v_class in select grade, section from subject_classes where subject_id = v_subject.id loop
+      for v_pt in 1..4 loop
+        insert into tests (name, subject_id, grade, section, academic_year_id, is_predefined, pt_number)
+        values ('PT-' || v_pt, v_subject.id, v_class.grade, v_class.section, v_year_id, true, v_pt)
+        on conflict (subject_id, grade, section, academic_year_id, name) do nothing;
+        get diagnostics v_rows = row_count;
+        v_created := v_created + v_rows;
       end loop;
     end loop;
   end loop;
@@ -337,7 +347,8 @@ end;
 $$;
 
 -- ── RPC: submit marks for a test (bulk upsert, access-checked) ─────────
--- p_records is a JSON object like {"<student_uuid>": 18, "<student_uuid>": 20}
+-- p_records values can be a plain number, or the string "ABSENT" to mark
+-- that student absent for this test.
 
 create or replace function submit_marks(p_test_id uuid, p_records jsonb)
 returns jsonb
@@ -347,6 +358,7 @@ as $$
 declare
   v_test tests%rowtype;
   rec record;
+  v_absent boolean;
   v_value numeric;
   v_saved int := 0;
 begin
@@ -357,15 +369,18 @@ begin
   end if;
 
   for rec in select * from jsonb_each_text(p_records) loop
-    v_value := rec.value::numeric;
-    if v_test.max_marks is not null and v_value > v_test.max_marks then
+    v_absent := (rec.value = 'ABSENT');
+    v_value := case when v_absent then null else rec.value::numeric end;
+
+    if not v_absent and v_test.max_marks is not null and v_value > v_test.max_marks then
       raise exception 'Marks % exceed max marks % for one student', v_value, v_test.max_marks;
     end if;
 
-    insert into marks (test_id, student_id, marks_obtained, entered_by, entered_at)
-    values (p_test_id, rec.key::uuid, v_value, auth.uid(), now())
+    insert into marks (test_id, student_id, marks_obtained, is_absent, entered_by, entered_at)
+    values (p_test_id, rec.key::uuid, v_value, v_absent, auth.uid(), now())
     on conflict (test_id, student_id) do update
       set marks_obtained = excluded.marks_obtained,
+          is_absent = excluded.is_absent,
           entered_by = excluded.entered_by,
           entered_at = excluded.entered_at;
     v_saved := v_saved + 1;
@@ -439,7 +454,7 @@ $$;
 -- all subjects, or a term's worth of tests) — subject columns pivoted out
 -- client-side from this flat row-per-student-per-test shape.
 create or replace function get_class_result_sheet(p_test_ids uuid[], p_grade text, p_section text)
-returns table(student_id uuid, student_name text, test_id uuid, test_name text, subject_name text, marks_obtained numeric, max_marks numeric)
+returns table(student_id uuid, student_name text, test_id uuid, test_name text, subject_name text, marks_obtained numeric, max_marks numeric, is_absent boolean)
 language plpgsql security definer
 set search_path = public
 as $$
@@ -451,7 +466,7 @@ begin
   end if;
 
   return query
-  select s.id, s.name, t.id, t.name, sub.name, m.marks_obtained, t.max_marks
+  select s.id, s.name, t.id, t.name, sub.name, m.marks_obtained, t.max_marks, coalesce(m.is_absent, false)
   from students s
   cross join unnest(p_test_ids) as chosen_test_id
   join tests t on t.id = chosen_test_id and t.grade = p_grade and t.section = p_section
@@ -459,6 +474,70 @@ begin
   left join marks m on m.test_id = t.id and m.student_id = s.id
   where s.grade = p_grade and s.section = p_section and s.active
   order by s.name, sub.name;
+end;
+$$;
+
+-- ── RPC: create / update / delete a subject (with its class list) ──────
+
+create or replace function create_subject(p_name text, p_classes jsonb)
+returns jsonb
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  v_id uuid;
+  v_class record;
+begin
+  if not is_super_admin() then raise exception 'Super admin access required'; end if;
+
+  insert into subjects (name) values (p_name) returning id into v_id;
+
+  for v_class in select * from jsonb_to_recordset(p_classes) as x(grade text, section text) loop
+    insert into subject_classes (subject_id, grade, section) values (v_id, v_class.grade, v_class.section)
+    on conflict do nothing;
+  end loop;
+
+  return jsonb_build_object('ok', true, 'subjectId', v_id);
+end;
+$$;
+
+create or replace function update_subject(p_subject_id uuid, p_name text, p_classes jsonb)
+returns jsonb
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  v_class record;
+begin
+  if not is_super_admin() then raise exception 'Super admin access required'; end if;
+
+  update subjects set name = p_name where id = p_subject_id;
+
+  delete from subject_classes where subject_id = p_subject_id;
+  for v_class in select * from jsonb_to_recordset(p_classes) as x(grade text, section text) loop
+    insert into subject_classes (subject_id, grade, section) values (p_subject_id, v_class.grade, v_class.section)
+    on conflict do nothing;
+  end loop;
+
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
+create or replace function delete_subject(p_subject_id uuid)
+returns jsonb
+language plpgsql security definer
+set search_path = public
+as $$
+begin
+  if not is_super_admin() then raise exception 'Super admin access required'; end if;
+
+  delete from marks where test_id in (select id from tests where subject_id = p_subject_id);
+  delete from tests where subject_id = p_subject_id;
+  delete from teacher_assignments where subject_id = p_subject_id;
+  delete from subject_classes where subject_id = p_subject_id;
+  delete from subjects where id = p_subject_id;
+
+  return jsonb_build_object('ok', true);
 end;
 $$;
 

@@ -24,14 +24,22 @@ table names don't collide) or use a fresh one — either is fine.
 
 ## 2. Run the schema
 
-**SQL Editor** → paste in the entire contents of `supabase/schema.sql` → **Run**.
+**New project:** SQL Editor → paste in the entire contents of `supabase/schema.sql` → **Run**.
 
-This creates: `profiles`, `subjects`, `houses`, `academic_years`,
-`teacher_assignments`, `field_definitions`, `students`, `tests`, `marks` —
-plus all the RLS policies and the functions the app calls
+**Existing project (you already ran schema.sql before):** instead, run
+`supabase/migrations/002_role_restructure_and_subject_classes.sql` — this
+adds what changed (subject→class mapping, absent marking, updated
+permissions) without touching any data you've already entered. See
+"What changed in migration 002" near the bottom of this file for the full
+list of behavior changes it brings.
+
+This creates: `profiles`, `subjects`, `subject_classes`, `houses`,
+`academic_years`, `teacher_assignments`, `field_definitions`, `students`,
+`tests`, `marks` — plus all the RLS policies and the functions the app calls
 (`initialize_academic_year`, `set_pt_max_marks`, `set_test_lock`,
 `create_test`, `update_test`, `submit_marks`, `get_leaderboard`,
-`get_top_n_per_class`, `get_class_result_sheet`, `add_field_definition`).
+`get_top_n_per_class`, `get_class_result_sheet`, `add_field_definition`,
+`create_subject`, `update_subject`, `delete_subject`).
 
 ## 3. Turn off email confirmation
 
@@ -48,6 +56,12 @@ supabase functions deploy admin-actions
 ```
 Or paste `supabase/functions/admin-actions/index.ts` into a new function
 called `admin-actions` from the dashboard's Edge Functions tab.
+
+**If you already had this function deployed**, redeploy it — account
+creation and password resets are now super-admin-only (previously regular
+admins could create teacher accounts too). Deploying with the old code
+still running is the most common cause of a silent-looking failure when
+adding a teacher.
 
 ## 5. Create the super admin (one-time, in the dashboard)
 
@@ -87,29 +101,70 @@ Same as before: repo **Settings → Pages** → **Deploy from a branch** →
 
 ## 8. First-time setup, in order
 
-Once you're signed in as super admin (or an admin they've created):
+Once you're signed in as super admin (the only role that can reach the
+Setup tab):
 
-1. **Setup tab** → add your **Subjects** (e.g. Math, Science, English...) —
-   do this before initializing a year, since PT-1 to PT-4 get generated for
-   every subject that exists at that moment.
-2. **Setup tab** → add **Houses** if you use them.
-3. **Setup tab** → type an academic year label (e.g. `2026-27`) and click
+1. **Setup tab** → add your **Subjects** — for each one, check which
+   grade(s) and section(s) actually take it. PT-1 to PT-4 only get
+   generated for the classes you check here, so get this right before
+   initializing a year (you can always edit it later from the same tab).
+2. **Setup tab** → type an academic year label (e.g. `2026-27`) and click
    **Create year & generate PT-1 to PT-4**. This creates one PT-1..PT-4 row
-   for every subject × grade × section (3 × 7 × your subject count) with
-   blank, unlocked max marks.
-4. **PT Max Marks tab** → for each subject/class, set the max marks for
-   PT-1 through PT-4, then **Lock** them once finalized. Locked tests can't
-   be edited until explicitly unlocked.
-5. **Students tab** → CSV import (`sample-data/students_template.csv`) or
-   add one at a time.
-6. **Teachers tab** → create teacher accounts, assigning each one or more
-   subject+class combinations. Only the super admin sees the option to
-   create another **admin** account here.
+   for every class each subject is actually mapped to.
+3. **PT Max Marks tab** → check the grade(s)/section(s) and pick a subject,
+   then set max marks for PT-1 through PT-4 for however many classes you
+   checked at once, and **Lock** each once finalized. Locked tests can't be
+   edited until explicitly unlocked.
+4. **Students tab** → CSV import (`sample-data/students_template.csv`) or
+   add one at a time. Houses are assigned per-student here from whatever
+   houses already exist in your database — there's no house management UI
+   anymore since yours are already set up.
+5. **Teachers tab** → create teacher accounts, assigning each one or more
+   subject+class combinations.
 
-From there: teachers sign in, see only their assigned subject+class
-combinations, and can create custom tests or enter marks (including for
-PT-1..4, once an admin has set and possibly locked the max marks — a PT with
-no max marks set yet shows "Enter marks" disabled).
+From there: teachers sign in, pick their grade/class/subject from three
+independent dropdowns (only combinations they're actually assigned to are
+selectable), and can create custom tests or enter marks — including for
+PT-1..4, once a super admin has set (and possibly locked) the max marks.
+
+---
+
+## What changed in migration 002
+
+If you set this system up before and are updating it, here's the full list
+of behavior changes this migration and the matching frontend update bring:
+
+1. **Subjects now have an explicit class list.** Previously every subject
+   applied to all 21 classes; now each subject only applies to the
+   grade+section combinations you check when creating or editing it. This
+   also means `initialize_academic_year()` only creates PT-1..4 for a
+   subject's actual classes, not all 21.
+2. **Subjects can be edited and deleted.** Deleting a subject cascades —
+   it removes all of that subject's tests, marks, and teacher assignments.
+   The UI requires typing the subject's name to confirm, since this can't
+   be undone.
+3. **Houses are no longer managed from the UI.** The Setup tab no longer
+   has an "add house" form — your existing houses are untouched in the
+   database and still assignable to students from the Students tab.
+4. **Role boundaries changed.** Regular admins can no longer see the Setup,
+   PT Max Marks, or Teachers tabs — those are super-admin-only now (both in
+   the UI and enforced server-side in the Edge Function and RLS). Admins
+   still have Tests & Marks, Students, and Reports.
+5. **PT Max Marks and Tests & Marks support multiple classes at once**, via
+   checkboxes for grade and section — but only for the super admin. A
+   regular admin's Tests & Marks picker still behaves like a single-class
+   dropdown (checking a box unchecks any other in that group).
+6. **Teachers' pickers are three independent dropdowns** (grade, class,
+   subject) instead of one combined "Subject — Grade-Section" list, and
+   there's no academic year dropdown anymore — the app always uses whichever
+   year is marked current.
+7. **The tests list is hidden during marks entry** on the teacher page —
+   only the pickers and the student marks table show, with a "← Back to
+   tests" link to return.
+8. **Marking a student absent** — a checkbox next to each student in marks
+   entry. An absent student's marks input is disabled and cleared; reports
+   show "AB" for them and exclude them from percentage calculations (same
+   as an ungraded entry always did).
 
 ---
 
@@ -151,10 +206,12 @@ assigned subject+class combinations by Postgres itself — not by a
 client-side check that could be bypassed.
 
 The **role hierarchy** is enforced in the `admin-actions` Edge Function:
-teachers are created by admin or super admin; admin accounts can only be
-created by the super admin; the super admin is never created through the
-app UI at all, and the database has a hard constraint (a partial unique
-index) guaranteeing only one can ever exist.
+account creation and password resets are super-admin-only. The super admin
+is never created through the app UI at all, and the database has a hard
+constraint (a partial unique index) guaranteeing only one can ever exist.
+Regular admins have Tests & Marks, Students, and Reports; Setup, PT Max
+Marks, and Teachers are super-admin-only, both in the UI and enforced again
+server-side so hiding a tab isn't the only thing stopping access.
 
 **Predefined PT protection**: `update_test()` explicitly refuses to touch
 any test where `is_predefined = true` — the only way to change a PT's max
