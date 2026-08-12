@@ -1,4 +1,4 @@
-let profile, assignments = [], years = [], currentTests = [], currentTest = null, currentStudents = [];
+let profile, assignments = [], currentYearId = null, currentTests = [], currentTest = null, currentStudents = [];
 
 async function signOut() {
   await Auth.logout();
@@ -15,16 +15,49 @@ async function changePassword() {
   alert('Password updated.');
 }
 
-function selectedAssignment() {
-  const idx = document.getElementById('assignmentPicker').value;
-  return assignments[idx];
+// ── CASCADING GRADE → SECTION → SUBJECT PICKERS ─────────────────────────
+// Only combinations the teacher is actually assigned to are selectable.
+
+function distinctGrades() {
+  return [...new Set(assignments.map(a => a.grade))].sort();
+}
+function sectionsForGrade(grade) {
+  return [...new Set(assignments.filter(a => a.grade === grade).map(a => a.section))].sort();
+}
+function subjectsForGradeSection(grade, section) {
+  return assignments.filter(a => a.grade === grade && a.section === section);
 }
 
-function selectedYearId() {
-  return document.getElementById('yearPicker').value;
+function currentAssignment() {
+  const subjectId = document.getElementById('subjectPicker').value;
+  const grade = document.getElementById('gradePicker').value;
+  const section = document.getElementById('sectionPicker').value;
+  return assignments.find(a => a.grade === grade && a.section === section && a.subject_id === subjectId);
 }
 
-async function loadAssignmentsAndYears() {
+function populateGradePicker() {
+  const grades = distinctGrades();
+  document.getElementById('gradePicker').innerHTML = grades.map(g => `<option value="${g}">${g}</option>`).join('');
+  populateSectionPicker();
+}
+
+function populateSectionPicker() {
+  const grade = document.getElementById('gradePicker').value;
+  const sections = sectionsForGrade(grade);
+  document.getElementById('sectionPicker').innerHTML = sections.map(s => `<option value="${s}">${s}</option>`).join('');
+  populateSubjectPicker();
+}
+
+function populateSubjectPicker() {
+  const grade = document.getElementById('gradePicker').value;
+  const section = document.getElementById('sectionPicker').value;
+  const subs = subjectsForGradeSection(grade, section);
+  document.getElementById('subjectPicker').innerHTML = subs.map(a => `<option value="${a.subject_id}">${a.subjects.name}</option>`).join('');
+  backToTests();
+  loadTests();
+}
+
+async function loadAssignmentsAndYear() {
   const { data: assignData, error: assignErr } = await sb
     .from('teacher_assignments')
     .select('id, subject_id, grade, section, subjects(name)')
@@ -32,21 +65,22 @@ async function loadAssignmentsAndYears() {
   if (assignErr) { alert(assignErr.message); return; }
   assignments = assignData;
 
-  const picker = document.getElementById('assignmentPicker');
   if (!assignments.length) {
-    picker.innerHTML = '<option>No classes assigned yet — contact admin</option>';
+    document.getElementById('testList').innerHTML = '<div class="empty-state">No classes assigned yet — contact admin.</div>';
     return;
   }
-  picker.innerHTML = assignments.map((a, i) => `<option value="${i}">${a.subjects.name} — Grade ${a.grade}-${a.section}</option>`).join('');
 
-  const { data: yearData } = await sb.from('academic_years').select('*').order('label', { ascending: false });
-  years = yearData || [];
-  const yearPicker = document.getElementById('yearPicker');
-  yearPicker.innerHTML = years.map(y => `<option value="${y.id}" ${y.is_current ? 'selected' : ''}>${y.label}</option>`).join('');
+  const { data: yearData, error: yearErr } = await sb.from('academic_years').select('id, label').eq('is_current', true).maybeSingle();
+  if (yearErr || !yearData) {
+    document.getElementById('testList').innerHTML = '<div class="status-banner warn">No current academic year is set. Ask the admin to mark one as current.</div>';
+    return;
+  }
+  currentYearId = yearData.id;
 
-  picker.addEventListener('change', loadTests);
-  yearPicker.addEventListener('change', loadTests);
-  loadTests();
+  populateGradePicker();
+  document.getElementById('gradePicker').addEventListener('change', populateSectionPicker);
+  document.getElementById('sectionPicker').addEventListener('change', populateSubjectPicker);
+  document.getElementById('subjectPicker').addEventListener('change', () => { backToTests(); loadTests(); });
 }
 
 function showNewTestForm() {
@@ -54,14 +88,14 @@ function showNewTestForm() {
 }
 
 async function createTest() {
-  const a = selectedAssignment();
+  const a = currentAssignment();
   const name = document.getElementById('newTestName').value.trim();
   const maxMarks = parseFloat(document.getElementById('newTestMax').value);
   if (!name || !maxMarks) { alert('Enter a test name and max marks'); return; }
 
-  const { data, error } = await sb.rpc('create_test', {
+  const { error } = await sb.rpc('create_test', {
     p_name: name, p_subject_id: a.subject_id, p_grade: a.grade, p_section: a.section,
-    p_academic_year_id: selectedYearId(), p_max_marks: maxMarks
+    p_academic_year_id: currentYearId, p_max_marks: maxMarks
   });
   if (error) { alert(error.message); return; }
   document.getElementById('newTestForm').style.display = 'none';
@@ -71,18 +105,17 @@ async function createTest() {
 }
 
 async function loadTests() {
-  const a = selectedAssignment();
-  if (!a) return;
-  document.getElementById('marksCard').style.display = 'none';
+  const a = currentAssignment();
+  if (!a || !currentYearId) return;
 
   const { data, error } = await sb.from('tests').select('*')
-    .eq('subject_id', a.subject_id).eq('grade', a.grade).eq('section', a.section).eq('academic_year_id', selectedYearId())
+    .eq('subject_id', a.subject_id).eq('grade', a.grade).eq('section', a.section).eq('academic_year_id', currentYearId)
     .order('is_predefined', { ascending: false }).order('pt_number').order('name');
   if (error) { document.getElementById('testList').innerHTML = `<div class="status-banner warn">${error.message}</div>`; return; }
 
   currentTests = data;
   const listEl = document.getElementById('testList');
-  if (!data.length) { listEl.innerHTML = '<div class="empty-state">No tests yet for this class/year.</div>'; return; }
+  if (!data.length) { listEl.innerHTML = '<div class="empty-state">No tests yet for this class/subject.</div>'; return; }
 
   listEl.innerHTML = data.map(t => `
     <div class="test-row">
@@ -93,31 +126,44 @@ async function loadTests() {
     </div>`).join('');
 }
 
+function backToTests() {
+  document.getElementById('marksCard').style.display = 'none';
+  document.getElementById('testsCard').style.display = 'block';
+}
+
 async function openMarksEntry(testId) {
   currentTest = currentTests.find(t => t.id === testId);
-  const a = selectedAssignment();
+  const a = currentAssignment();
 
   const { data: students, error: studErr } = await sb.from('students').select('id, name')
     .eq('grade', a.grade).eq('section', a.section).eq('active', true).order('name');
   if (studErr) { alert(studErr.message); return; }
   currentStudents = students;
 
-  const { data: marks } = await sb.from('marks').select('student_id, marks_obtained').eq('test_id', testId);
+  const { data: marks } = await sb.from('marks').select('student_id, marks_obtained, is_absent').eq('test_id', testId);
   const marksByStudent = {};
-  (marks || []).forEach(m => { marksByStudent[m.student_id] = m.marks_obtained; });
+  (marks || []).forEach(m => { marksByStudent[m.student_id] = m; });
 
   document.getElementById('marksTitle').textContent = `${currentTest.name} — Grade ${a.grade}-${a.section}`;
   document.getElementById('maxMarksHint').textContent = `Max marks: ${currentTest.max_marks}`;
   document.getElementById('marksBanner').innerHTML = '';
 
   const body = document.getElementById('marksBody');
-  body.innerHTML = students.map((s, i) => `
+  body.innerHTML = students.map((s, i) => {
+    const existing = marksByStudent[s.id];
+    const absent = existing?.is_absent;
+    return `
     <tr>
       <td class="roll-no mono">${i + 1}</td>
       <td>${s.name}</td>
-      <td><input type="number" min="0" max="${currentTest.max_marks}" step="0.5" id="marks-${s.id}" value="${marksByStudent[s.id] ?? ''}"></td>
-    </tr>`).join('');
+      <td><input type="number" min="0" max="${currentTest.max_marks}" step="0.5" id="marks-${s.id}" value="${absent ? '' : (existing?.marks_obtained ?? '')}" ${absent ? 'disabled' : ''}></td>
+      <td><input type="checkbox" id="absent-${s.id}" ${absent ? 'checked' : ''} onchange="document.getElementById('marks-${s.id}').disabled=this.checked; if(this.checked) document.getElementById('marks-${s.id}').value='';"></td>
+    </tr>`;
+  }).join('');
 
+  // This is the "show only pickers + students" step — hide the tests list
+  // while marks entry is open.
+  document.getElementById('testsCard').style.display = 'none';
   document.getElementById('marksCard').style.display = 'block';
   document.getElementById('marksCard').scrollIntoView({ behavior: 'smooth' });
 }
@@ -125,6 +171,8 @@ async function openMarksEntry(testId) {
 async function submitMarks() {
   const records = {};
   for (const s of currentStudents) {
+    const absent = document.getElementById(`absent-${s.id}`).checked;
+    if (absent) { records[s.id] = 'ABSENT'; continue; }
     const val = document.getElementById(`marks-${s.id}`).value;
     if (val !== '') records[s.id] = parseFloat(val);
   }
@@ -144,5 +192,5 @@ window.onload = async () => {
   if (profile.role !== 'teacher') { window.location.href = 'admin.html'; return; }
 
   document.getElementById('whoLabel').textContent = `${profile.name} (${profile.username})`;
-  loadAssignmentsAndYears();
+  loadAssignmentsAndYear();
 };

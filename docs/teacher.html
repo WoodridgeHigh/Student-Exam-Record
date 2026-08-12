@@ -30,13 +30,15 @@
   <h2 class="display">My Classes</h2>
 
   <div class="form-row">
+    <label class="hint">Grade</label>
+    <select id="gradePicker"></select>
     <label class="hint">Class</label>
-    <select id="assignmentPicker"></select>
-    <label class="hint">Academic year</label>
-    <select id="yearPicker"></select>
+    <select id="sectionPicker"></select>
+    <label class="hint">Subject</label>
+    <select id="subjectPicker"></select>
   </div>
 
-  <div class="card">
+  <div class="card" id="testsCard">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
       <h3 style="margin:0;">Tests</h3>
       <button class="btn small" onclick="showNewTestForm()">+ New test</button>
@@ -53,10 +55,13 @@
   </div>
 
   <div class="card" id="marksCard" style="display:none;">
-    <h3 id="marksTitle"></h3>
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h3 id="marksTitle"></h3>
+      <button class="link" onclick="backToTests()">← Back to tests</button>
+    </div>
     <div class="summary-bar"><span class="hint" id="maxMarksHint"></span></div>
     <table class="roll" id="marksTable">
-      <thead><tr><th style="width:50px;">#</th><th>Student</th><th style="width:110px;">Marks</th></tr></thead>
+      <thead><tr><th style="width:50px;">#</th><th>Student</th><th style="width:110px;">Marks</th><th style="width:80px;">Absent</th></tr></thead>
       <tbody id="marksBody"></tbody>
     </table>
     <div id="marksBanner"></div>

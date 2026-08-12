@@ -1,4 +1,7 @@
-let profile, subjects = [], houses = [], years = [], fieldDefs = [], pendingAssignments = [];
+let profile, subjects = [], subjectClasses = [], houses = [], years = [], fieldDefs = [], pendingAssignments = [];
+
+const GRADE_LIST = ['6', '7', '8'];
+const SECTION_LIST = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
 
 async function signOut() {
   await Auth.logout();
@@ -19,22 +22,56 @@ function showTab(name) {
   document.querySelectorAll('.tabpanel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
   document.getElementById(`tab-${name}`).classList.add('active');
-  document.querySelector(`.tabs button[data-tab="${name}"]`).classList.add('active');
+  const btn = document.querySelector(`.tabs button[data-tab="${name}"]`);
+  if (btn) btn.classList.add('active');
   if (name === 'teachers') loadTeachers();
   if (name === 'students') loadStudents();
   if (name === 'fields') loadFields();
 }
 
-// ── SHARED DATA (subjects, houses, years, field definitions) ───────────
+// ── REUSABLE GRADE/SECTION CHECKBOX GRID ────────────────────────────────
+// mode 'multi' = normal checkboxes. mode 'single' = radio-like (checking
+// one unchecks the others in that group) — used for the admin role on the
+// Tests & Marks page, where super_admin gets full multi-select instead.
+
+function renderCheckGrid(gradeSpanId, sectionSpanId, mode) {
+  const gEl = document.getElementById(gradeSpanId);
+  const sEl = document.getElementById(sectionSpanId);
+  if (!gEl || !sEl) return;
+  gEl.innerHTML = GRADE_LIST.map(g => `<label style="margin-right:8px;"><input type="checkbox" class="grid-${gradeSpanId}" value="${g}"> ${g}</label>`).join('');
+  sEl.innerHTML = SECTION_LIST.map(s => `<label style="margin-right:8px;"><input type="checkbox" class="grid-${sectionSpanId}" value="${s}"> ${s}</label>`).join('');
+
+  if (mode === 'single') {
+    [gradeSpanId, sectionSpanId].forEach(spanId => {
+      document.querySelectorAll(`.grid-${spanId}`).forEach(cb => {
+        cb.addEventListener('change', () => {
+          if (cb.checked) document.querySelectorAll(`.grid-${spanId}`).forEach(o => { if (o !== cb) o.checked = false; });
+        });
+      });
+    });
+  }
+}
+
+function getChecked(spanId) {
+  return Array.from(document.querySelectorAll(`.grid-${spanId}:checked`)).map(cb => cb.value);
+}
+
+function checkAll(spanId) {
+  document.querySelectorAll(`.grid-${spanId}`).forEach(cb => cb.checked = true);
+}
+
+// ── SHARED DATA ──────────────────────────────────────────────────────────
 
 async function loadSharedData() {
-  const [{ data: subjData }, { data: houseData }, { data: yearData }, { data: fieldData }] = await Promise.all([
+  const [{ data: subjData }, { data: classData }, { data: houseData }, { data: yearData }, { data: fieldData }] = await Promise.all([
     sb.from('subjects').select('*').order('name'),
+    sb.from('subject_classes').select('*'),
     sb.from('houses').select('*').order('name'),
     sb.from('academic_years').select('*').order('label', { ascending: false }),
     sb.from('field_definitions').select('*').order('created_at')
   ]);
   subjects = subjData || [];
+  subjectClasses = classData || [];
   houses = houseData || [];
   years = yearData || [];
   fieldDefs = fieldData || [];
@@ -43,16 +80,23 @@ async function loadSharedData() {
   const yearOptions = years.map(y => `<option value="${y.id}" ${y.is_current ? 'selected' : ''}>${y.label}</option>`).join('');
   const houseOptions = houses.map(h => `<option value="${h.id}">${h.name}</option>`).join('');
 
-  ['ptSubject', 'tmSubject', 'assignSubject'].forEach(id => document.getElementById(id).innerHTML = subjectOptions);
-  ['ptYear', 'tmYear', 'repYear'].forEach(id => document.getElementById(id).innerHTML = yearOptions);
-  document.getElementById('repSubject').innerHTML += subjectOptions;
-  document.getElementById('stuHouse').innerHTML = '<option value="">No house</option>' + houseOptions;
-  document.getElementById('lbHouse').innerHTML += houseOptions;
+  ['ptSubject', 'tmSubject', 'assignSubject'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = subjectOptions; });
+  ['ptYear', 'tmYear', 'repYear'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = yearOptions; });
+  const repSubjectEl = document.getElementById('repSubject');
+  if (repSubjectEl) repSubjectEl.innerHTML = '<option value="">Any subject</option>' + subjectOptions;
+  const stuHouseEl = document.getElementById('stuHouse');
+  if (stuHouseEl) stuHouseEl.innerHTML = '<option value="">No house</option>' + houseOptions;
+  const lbHouseEl = document.getElementById('lbHouse');
+  if (lbHouseEl) lbHouseEl.innerHTML = '<option value="">All houses</option>' + houseOptions;
 
   renderSetupLists();
 }
 
-// ── SETUP TAB ────────────────────────────────────────────────────────────
+function classesForSubject(subjectId) {
+  return subjectClasses.filter(c => c.subject_id === subjectId).map(c => `${c.grade}-${c.section}`);
+}
+
+// ── SETUP TAB (super admin only) ─────────────────────────────────────────
 
 function renderSetupLists() {
   document.getElementById('yearsList').innerHTML = years.map(y => `
@@ -61,25 +105,84 @@ function renderSetupLists() {
       ${!y.is_current ? `<button class="btn small secondary" onclick="setCurrentYear('${y.id}')">Set as current</button>` : ''}
     </div>`).join('') || '<p class="hint">No academic years yet.</p>';
 
-  document.getElementById('subjectsList').innerHTML = subjects.map(s => `<div class="test-row"><div>${s.name}</div></div>`).join('') || '<p class="hint">No subjects yet — add some above before initializing a year.</p>';
-  document.getElementById('housesList').innerHTML = houses.map(h => `<div class="test-row"><div>${h.name}</div></div>`).join('') || '<p class="hint">No houses yet.</p>';
+  document.getElementById('subjectsList').innerHTML = subjects.map(s => `
+    <div class="test-row">
+      <div>${s.name} <span class="hint">(${classesForSubject(s.id).join(', ') || 'no classes assigned'})</span></div>
+      <div style="display:flex; gap:6px;">
+        <button class="btn small secondary" onclick="editSubject('${s.id}')">Edit</button>
+        <button class="btn small secondary" onclick="deleteSubjectConfirm('${s.id}')">Delete</button>
+      </div>
+    </div>
+    <div id="editSubjectPanel-${s.id}" style="display:none; padding:10px 0;"></div>
+  `).join('') || '<p class="hint">No subjects yet.</p>';
+
+  renderCheckGrid('newSubjectGrades', 'newSubjectSections', 'multi');
 }
 
 async function addSubject() {
   const name = document.getElementById('newSubjectName').value.trim();
-  if (!name) return;
-  const { error } = await sb.from('subjects').insert({ name });
+  if (!name) { alert('Enter a subject name'); return; }
+  const grades = getChecked('newSubjectGrades');
+  const sections = getChecked('newSubjectSections');
+  if (!grades.length || !sections.length) { alert('Check at least one grade and one section'); return; }
+
+  const classes = [];
+  grades.forEach(g => sections.forEach(s => classes.push({ grade: g, section: s })));
+
+  const { error } = await sb.rpc('create_subject', { p_name: name, p_classes: classes });
   if (error) { alert(error.message); return; }
   document.getElementById('newSubjectName').value = '';
   await loadSharedData();
 }
 
-async function addHouse() {
-  const name = document.getElementById('newHouseName').value.trim();
-  if (!name) return;
-  const { error } = await sb.from('houses').insert({ name });
+function editSubject(subjectId) {
+  const subject = subjects.find(s => s.id === subjectId);
+  const panel = document.getElementById(`editSubjectPanel-${subjectId}`);
+  const currentClasses = subjectClasses.filter(c => c.subject_id === subjectId);
+
+  panel.innerHTML = `
+    <div class="subcard">
+      <div class="form-row"><input id="editName-${subjectId}" value="${subject.name}"></div>
+      <div class="form-row">
+        <div>Grades: <span id="editGrades-${subjectId}"></span></div>
+        <div>Sections: <span id="editSections-${subjectId}"></span></div>
+      </div>
+      <button class="btn small" onclick="saveSubjectEdit('${subjectId}')">Save</button>
+      <button class="btn small secondary" onclick="document.getElementById('editSubjectPanel-${subjectId}').style.display='none'">Cancel</button>
+    </div>`;
+  panel.style.display = 'block';
+  renderCheckGrid(`editGrades-${subjectId}`, `editSections-${subjectId}`, 'multi');
+  currentClasses.forEach(c => {
+    const gEl = document.querySelector(`.grid-editGrades-${subjectId}[value="${c.grade}"]`);
+    const sEl = document.querySelector(`.grid-editSections-${subjectId}[value="${c.section}"]`);
+    if (gEl) gEl.checked = true;
+    if (sEl) sEl.checked = true;
+  });
+}
+
+async function saveSubjectEdit(subjectId) {
+  const name = document.getElementById(`editName-${subjectId}`).value.trim();
+  const grades = getChecked(`editGrades-${subjectId}`);
+  const sections = getChecked(`editSections-${subjectId}`);
+  if (!name || !grades.length || !sections.length) { alert('Enter a name and check at least one grade and section'); return; }
+
+  const classes = [];
+  grades.forEach(g => sections.forEach(s => classes.push({ grade: g, section: s })));
+
+  const { error } = await sb.rpc('update_subject', { p_subject_id: subjectId, p_name: name, p_classes: classes });
   if (error) { alert(error.message); return; }
-  document.getElementById('newHouseName').value = '';
+  await loadSharedData();
+}
+
+async function deleteSubjectConfirm(subjectId) {
+  const subject = subjects.find(s => s.id === subjectId);
+  const sure = window.confirm(`Delete "${subject.name}"? This permanently deletes ALL its tests and marks, for every class and every year. This cannot be undone.`);
+  if (!sure) return;
+  const typed = window.prompt(`Type the subject name exactly to confirm deletion:`);
+  if (typed !== subject.name) { alert('Name did not match — cancelled.'); return; }
+
+  const { error } = await sb.rpc('delete_subject', { p_subject_id: subjectId });
+  if (error) { alert(error.message); return; }
   await loadSharedData();
 }
 
@@ -101,25 +204,26 @@ async function initializeYear() {
   await loadSharedData();
 }
 
-// ── PT MAX MARKS TAB ─────────────────────────────────────────────────────
+// ── PT MAX MARKS TAB (super admin only) ─────────────────────────────────
 
 async function loadPtMarks() {
   const year = document.getElementById('ptYear').value;
   const subject = document.getElementById('ptSubject').value;
-  const grade = document.getElementById('ptGrade').value;
-  const section = document.getElementById('ptSection').value;
+  const grades = getChecked('ptGradeChecks');
+  const sections = getChecked('ptSectionChecks');
   const listEl = document.getElementById('ptMarksList');
   if (!year || !subject) { listEl.innerHTML = '<p class="hint">Pick a year and subject.</p>'; return; }
+  if (!grades.length || !sections.length) { listEl.innerHTML = '<p class="hint">Check at least one grade and one section.</p>'; return; }
 
   const { data, error } = await sb.from('tests').select('*')
-    .eq('academic_year_id', year).eq('subject_id', subject).eq('grade', grade).eq('section', section)
-    .eq('is_predefined', true).order('pt_number');
+    .eq('academic_year_id', year).eq('subject_id', subject).in('grade', grades).in('section', sections)
+    .eq('is_predefined', true).order('grade').order('section').order('pt_number');
   if (error) { listEl.innerHTML = `<div class="status-banner warn">${error.message}</div>`; return; }
-  if (!data.length) { listEl.innerHTML = '<p class="hint">No PT tests found — initialize this academic year first (Setup tab).</p>'; return; }
+  if (!data.length) { listEl.innerHTML = '<p class="hint">No PT tests found for this selection — initialize the academic year first (Setup tab), and make sure this subject is mapped to these classes.</p>'; return; }
 
   listEl.innerHTML = data.map(t => `
     <div class="test-row">
-      <div>${t.name} ${t.is_locked ? '<span class="badge">Locked</span>' : ''}</div>
+      <div>Grade ${t.grade}-${t.section} — ${t.name} ${t.is_locked ? '<span class="badge">Locked</span>' : ''}</div>
       <div style="display:flex; gap:8px; align-items:center;">
         <input type="number" id="pt-max-${t.id}" value="${t.max_marks ?? ''}" ${t.is_locked ? 'disabled' : ''} style="width:90px; padding:6px 8px; border:1px solid var(--paper-line); border-radius:3px;">
         <button class="btn small" onclick="savePtMax('${t.id}')" ${t.is_locked ? 'disabled' : ''}>Save</button>
@@ -142,21 +246,24 @@ async function toggleLock(testId, lock) {
   loadPtMarks();
 }
 
-// ── TESTS & MARKS TAB (admin — any class) ────────────────────────────────
+// ── TESTS & MARKS TAB ────────────────────────────────────────────────────
 
 let adminCurrentTests = [], adminCurrentTest = null, adminCurrentStudents = [];
 
 async function loadAdminTests() {
   const year = document.getElementById('tmYear').value;
   const subject = document.getElementById('tmSubject').value;
-  const grade = document.getElementById('tmGrade').value;
-  const section = document.getElementById('tmSection').value;
+  const grades = getChecked('tmGradeChecks');
+  const sections = getChecked('tmSectionChecks');
   document.getElementById('adminMarksCard').style.display = 'none';
+  const listEl = document.getElementById('adminTestList');
+
+  if (!year || !subject) { listEl.innerHTML = '<p class="hint">Pick a year and subject.</p>'; return; }
+  if (!grades.length || !sections.length) { listEl.innerHTML = '<p class="hint">Check at least one grade and one section.</p>'; return; }
 
   const { data, error } = await sb.from('tests').select('*')
-    .eq('academic_year_id', year).eq('subject_id', subject).eq('grade', grade).eq('section', section)
-    .order('is_predefined', { ascending: false }).order('pt_number').order('name');
-  const listEl = document.getElementById('adminTestList');
+    .eq('academic_year_id', year).eq('subject_id', subject).in('grade', grades).in('section', sections)
+    .order('grade').order('section').order('is_predefined', { ascending: false }).order('pt_number').order('name');
   if (error) { listEl.innerHTML = `<div class="status-banner warn">${error.message}</div>`; return; }
 
   adminCurrentTests = data;
@@ -164,7 +271,7 @@ async function loadAdminTests() {
 
   listEl.innerHTML = data.map(t => `
     <div class="test-row">
-      <div>${t.name}${t.is_predefined ? '<span class="badge">Predefined</span>' : ''}${t.is_locked ? '<span class="badge">Locked</span>' : ''}
+      <div>Grade ${t.grade}-${t.section} — ${t.name}${t.is_predefined ? '<span class="badge">Predefined</span>' : ''}${t.is_locked ? '<span class="badge">Locked</span>' : ''}
         <div class="hint">Max marks: ${t.max_marks ?? '— not set'}</div>
       </div>
       <div style="display:flex; gap:6px;">
@@ -177,14 +284,15 @@ async function loadAdminTests() {
 async function createAdminTest() {
   const name = document.getElementById('newTestName').value.trim();
   const maxMarks = parseFloat(document.getElementById('newTestMax').value);
+  const grades = getChecked('tmGradeChecks');
+  const sections = getChecked('tmSectionChecks');
   if (!name || !maxMarks) { alert('Enter a test name and max marks'); return; }
+  if (grades.length !== 1 || sections.length !== 1) { alert('Check exactly one grade and one section above before creating a test — a test belongs to a single class.'); return; }
+
   const { error } = await sb.rpc('create_test', {
-    p_name: name,
-    p_subject_id: document.getElementById('tmSubject').value,
-    p_grade: document.getElementById('tmGrade').value,
-    p_section: document.getElementById('tmSection').value,
-    p_academic_year_id: document.getElementById('tmYear').value,
-    p_max_marks: maxMarks
+    p_name: name, p_subject_id: document.getElementById('tmSubject').value,
+    p_grade: grades[0], p_section: sections[0],
+    p_academic_year_id: document.getElementById('tmYear').value, p_max_marks: maxMarks
   });
   if (error) { alert(error.message); return; }
   document.getElementById('newTestForm').style.display = 'none';
@@ -211,18 +319,23 @@ async function openAdminMarksEntry(testId) {
   if (error) { alert(error.message); return; }
   adminCurrentStudents = students;
 
-  const { data: marks } = await sb.from('marks').select('student_id, marks_obtained').eq('test_id', testId);
+  const { data: marks } = await sb.from('marks').select('student_id, marks_obtained, is_absent').eq('test_id', testId);
   const marksByStudent = {};
-  (marks || []).forEach(m => { marksByStudent[m.student_id] = m.marks_obtained; });
+  (marks || []).forEach(m => { marksByStudent[m.student_id] = m; });
 
   document.getElementById('adminMarksTitle').textContent = `${adminCurrentTest.name} — Grade ${adminCurrentTest.grade}-${adminCurrentTest.section} (max ${adminCurrentTest.max_marks})`;
   document.getElementById('adminMarksBanner').innerHTML = '';
-  document.getElementById('adminMarksBody').innerHTML = students.map((s, i) => `
+  document.getElementById('adminMarksBody').innerHTML = students.map((s, i) => {
+    const existing = marksByStudent[s.id];
+    const absent = existing?.is_absent;
+    return `
     <tr>
       <td class="roll-no mono">${i + 1}</td>
       <td>${s.name}</td>
-      <td><input type="number" min="0" max="${adminCurrentTest.max_marks}" step="0.5" id="amarks-${s.id}" value="${marksByStudent[s.id] ?? ''}"></td>
-    </tr>`).join('');
+      <td><input type="number" min="0" max="${adminCurrentTest.max_marks}" step="0.5" id="amarks-${s.id}" value="${absent ? '' : (existing?.marks_obtained ?? '')}" ${absent ? 'disabled' : ''}></td>
+      <td><label style="font-size:0.8rem;"><input type="checkbox" id="aabsent-${s.id}" ${absent ? 'checked' : ''} onchange="document.getElementById('amarks-${s.id}').disabled=this.checked; if(this.checked) document.getElementById('amarks-${s.id}').value='';"> Absent</label></td>
+    </tr>`;
+  }).join('');
   document.getElementById('adminMarksCard').style.display = 'block';
   document.getElementById('adminMarksCard').scrollIntoView({ behavior: 'smooth' });
 }
@@ -230,6 +343,8 @@ async function openAdminMarksEntry(testId) {
 async function submitAdminMarks() {
   const records = {};
   for (const s of adminCurrentStudents) {
+    const absent = document.getElementById(`aabsent-${s.id}`).checked;
+    if (absent) { records[s.id] = 'ABSENT'; continue; }
     const val = document.getElementById(`amarks-${s.id}`).value;
     if (val !== '') records[s.id] = parseFloat(val);
   }
@@ -349,7 +464,7 @@ async function editStudentFields(studentId) {
   loadStudents();
 }
 
-// ── TEACHERS TAB ──────────────────────────────────────────────────────────
+// ── TEACHERS TAB (super admin only) ──────────────────────────────────────
 
 function addAssignmentToBuilder() {
   const subjectId = document.getElementById('assignSubject').value;
@@ -495,7 +610,8 @@ async function generateReport() {
     const testNames = [...new Set(data.map(r => r.test_name + ' (' + r.subject_name + ')'))];
     const byStudent = {};
     data.forEach(r => {
-      (byStudent[r.student_name] ??= {})[r.test_name + ' (' + r.subject_name + ')'] = r.marks_obtained ?? '—';
+      const label = r.test_name + ' (' + r.subject_name + ')';
+      (byStudent[r.student_name] ??= {})[label] = r.is_absent ? 'AB' : (r.marks_obtained ?? '—');
     });
     printArea.innerHTML = `<h3>Class Result Sheet — Grade ${grade}-${section}</h3><table><thead><tr><th>Student</th>${testNames.map(n => `<th>${n}</th>`).join('')}</tr></thead><tbody>
       ${Object.keys(byStudent).map(name => `<tr><td>${name}</td>${testNames.map(n => `<td>${byStudent[name][n] ?? '—'}</td>`).join('')}</tr>`).join('')}
@@ -544,10 +660,21 @@ window.onload = async () => {
 
   document.getElementById('whoLabel').textContent = `${profile.name} (${profile.role})`;
 
-  if (profile.role === 'super_admin') {
+  const isSuperAdmin = profile.role === 'super_admin';
+  if (isSuperAdmin) {
     document.getElementById('fieldsTabBtn').style.display = 'inline-block';
     document.getElementById('adminRoleOption').style.display = 'block';
+  } else {
+    // Setup, PT Max Marks, and Teachers are super_admin-only now.
+    document.getElementById('setupTabBtn').style.display = 'none';
+    document.getElementById('ptmarksTabBtn').style.display = 'none';
+    document.getElementById('teachersTabBtn').style.display = 'none';
   }
 
+  renderCheckGrid('ptGradeChecks', 'ptSectionChecks', 'multi');
+  renderCheckGrid('tmGradeChecks', 'tmSectionChecks', isSuperAdmin ? 'multi' : 'single');
+
   await loadSharedData();
+
+  showTab(isSuperAdmin ? 'setup' : 'testsmarks');
 };

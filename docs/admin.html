@@ -38,11 +38,11 @@
 
 <div class="page">
   <div class="tabs">
-    <button class="active" data-tab="setup" onclick="showTab('setup')">Setup</button>
-    <button data-tab="ptmarks" onclick="showTab('ptmarks')">PT Max Marks</button>
+    <button class="active" data-tab="setup" id="setupTabBtn" onclick="showTab('setup')">Setup</button>
+    <button data-tab="ptmarks" id="ptmarksTabBtn" onclick="showTab('ptmarks')">PT Max Marks</button>
     <button data-tab="testsmarks" onclick="showTab('testsmarks')">Tests &amp; Marks</button>
     <button data-tab="students" onclick="showTab('students')">Students</button>
-    <button data-tab="teachers" onclick="showTab('teachers')">Teachers</button>
+    <button data-tab="teachers" id="teachersTabBtn" onclick="showTab('teachers')">Teachers</button>
     <button data-tab="reports" onclick="showTab('reports')">Reports</button>
     <button data-tab="fields" id="fieldsTabBtn" onclick="showTab('fields')" style="display:none;">Fields</button>
   </div>
@@ -62,27 +62,26 @@
       <h3>Subjects</h3>
       <div class="form-row">
         <input id="newSubjectName" placeholder="Subject name">
-        <button class="btn small" onclick="addSubject()">Add</button>
       </div>
-      <div id="subjectsList"></div>
-    </div>
-    <div class="subcard">
-      <h3>Houses</h3>
+      <p class="hint">Which classes take this subject?</p>
       <div class="form-row">
-        <input id="newHouseName" placeholder="House name">
-        <button class="btn small" onclick="addHouse()">Add</button>
+        <div>Grades: <span id="newSubjectGrades"></span></div>
+        <div>Sections: <span id="newSubjectSections"></span></div>
       </div>
-      <div id="housesList"></div>
+      <button class="btn small" onclick="addSubject()">Add subject</button>
+      <div id="subjectsList" style="margin-top:14px;"></div>
     </div>
   </div>
 
-  <!-- PT MAX MARKS -->
+  <!-- PT MAX MARKS (super admin only) -->
   <div class="tabpanel" id="tab-ptmarks">
     <div class="form-row">
       <select id="ptYear"></select>
       <select id="ptSubject"></select>
-      <select id="ptGrade"><option>6</option><option>7</option><option>8</option></select>
-      <select id="ptSection"><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option><option>G</option></select>
+    </div>
+    <div class="form-row">
+      <div>Grades: <span id="ptGradeChecks"></span></div>
+      <div>Sections: <span id="ptSectionChecks"></span></div>
       <button class="btn small secondary" onclick="loadPtMarks()">Load</button>
     </div>
     <div class="card" id="ptMarksList"></div>
@@ -93,8 +92,10 @@
     <div class="form-row">
       <select id="tmYear"></select>
       <select id="tmSubject"></select>
-      <select id="tmGrade"><option>6</option><option>7</option><option>8</option></select>
-      <select id="tmSection"><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option><option>G</option></select>
+    </div>
+    <div class="form-row">
+      <div>Grades: <span id="tmGradeChecks"></span></div>
+      <div>Sections: <span id="tmSectionChecks"></span></div>
       <button class="btn small secondary" onclick="loadAdminTests()">Load</button>
     </div>
     <div class="card">

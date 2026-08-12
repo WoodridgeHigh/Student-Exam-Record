@@ -66,17 +66,30 @@ const Auth = {
   },
 
   async callAdminAction(action, payload = {}) {
-    const { data: { session } } = await sb.auth.getSession();
-    const res = await fetch(`${CONFIG.SUPABASE_URL}/functions/v1/admin-actions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`,
-        'apikey': CONFIG.SUPABASE_ANON_KEY
-      },
-      body: JSON.stringify({ action, ...payload })
-    });
-    return res.json();
+    try {
+      const { data: { session } } = await sb.auth.getSession();
+      if (!session) return { ok: false, error: 'Your session has expired — please sign in again.' };
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const res = await fetch(`${CONFIG.SUPABASE_URL}/functions/v1/admin-actions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+            'apikey': CONFIG.SUPABASE_ANON_KEY
+          },
+          body: JSON.stringify({ action, ...payload })
+        });
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          return res.json();
+        }
+        if (attempt === 0) { await new Promise(r => setTimeout(r, 1000)); continue; }
+        return { ok: false, error: `The server returned an unexpected response (HTTP ${res.status}). This usually means the admin-actions Edge Function isn't deployed, or isn't deployed with the latest code — check Supabase → Edge Functions.` };
+      }
+    } catch (err) {
+      return { ok: false, error: `Could not reach the server: ${err.message}. Check your connection and that SUPABASE_URL in config.js is correct.` };
+    }
   }
 };
 
