@@ -95,3 +95,84 @@ const Auth = {
 
 const GRADES = ['6', '7', '8'];
 const SECTIONS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+
+// ── MARKS ENTRY UX HELPERS (shared by teacher.js and admin.js) ──────────
+
+// Wires up: Enter-to-next-row keyboard navigation, live max-marks
+// validation (red border), and a running "X / Y entered" counter.
+function wireMarksTableUX(students, maxMarks, markPrefix, absentPrefix, progressElId) {
+  function updateProgress() {
+    let filled = 0;
+    students.forEach(s => {
+      const absentEl = document.getElementById(`${absentPrefix}-${s.id}`);
+      const markEl = document.getElementById(`${markPrefix}-${s.id}`);
+      if ((absentEl && absentEl.checked) || (markEl && markEl.value !== '')) filled++;
+    });
+    const el = document.getElementById(progressElId);
+    if (el) el.textContent = `${filled} / ${students.length} entered`;
+  }
+
+  students.forEach((s, idx) => {
+    const input = document.getElementById(`${markPrefix}-${s.id}`);
+    const absentEl = document.getElementById(`${absentPrefix}-${s.id}`);
+    if (input) {
+      input.addEventListener('input', () => {
+        const val = parseFloat(input.value);
+        input.classList.toggle('invalid', !isNaN(val) && maxMarks != null && val > maxMarks);
+        updateProgress();
+      });
+      input.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const next = students[idx + 1];
+        const nextInput = next ? document.getElementById(`${markPrefix}-${next.id}`) : null;
+        if (nextInput) nextInput.focus();
+      });
+    }
+    if (absentEl) absentEl.addEventListener('change', updateProgress);
+  });
+  updateProgress();
+}
+
+// Builds and downloads an .xlsx template for a test's marks — one row per
+// student, pre-filled with any marks already saved, ready to fill in Excel
+// and re-upload.
+function downloadMarksTemplate(test, students, marksByStudent) {
+  const rows = students.map((s, i) => {
+    const existing = marksByStudent[s.id];
+    return {
+      'Roll': i + 1,
+      'Student ID': s.id,
+      'Name': s.name,
+      'Marks': existing && !existing.is_absent ? (existing.marks_obtained ?? '') : '',
+      'Absent (Y/N)': existing && existing.is_absent ? 'Y' : ''
+    };
+  });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [{ wch: 6 }, { wch: 24 }, { wch: 24 }, { wch: 8 }, { wch: 12 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Marks');
+  const safeName = `${test.name}_${test.grade}-${test.section}`.replace(/[^a-z0-9-]+/gi, '_');
+  XLSX.writeFile(wb, `${safeName}_marks_template.xlsx`);
+}
+
+// Reads an uploaded .xlsx/.xls/.csv file and returns { studentId: { marks, absent } }.
+// Matching is by "Student ID" — the template includes it precisely so a
+// re-upload can't be misattributed by a typo'd or duplicate name.
+async function parseMarksFile(file) {
+  const data = await file.arrayBuffer();
+  const wb = XLSX.read(data, { type: 'array' });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+  const result = {};
+  rows.forEach(r => {
+    const id = String(r['Student ID'] || '').trim();
+    if (!id) return;
+    const absent = String(r['Absent (Y/N)'] || '').trim().toUpperCase().startsWith('Y');
+    const marksRaw = r['Marks'];
+    const marks = absent || marksRaw === '' || marksRaw == null ? null : Number(marksRaw);
+    result[id] = { absent, marks };
+  });
+  return result;
+}

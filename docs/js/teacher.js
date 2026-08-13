@@ -1,4 +1,4 @@
-let profile, assignments = [], currentYearId = null, currentTests = [], currentTest = null, currentStudents = [];
+let profile, assignments = [], currentYearId = null, currentTests = [], currentTest = null, currentStudents = [], currentMarksByStudent = {};
 
 async function signOut() {
   await Auth.logout();
@@ -188,31 +188,75 @@ async function openMarksEntry(testId) {
   currentStudents = students;
 
   const { data: marks } = await sb.from('marks').select('student_id, marks_obtained, is_absent').eq('test_id', testId);
-  const marksByStudent = {};
-  (marks || []).forEach(m => { marksByStudent[m.student_id] = m; });
+  currentMarksByStudent = {};
+  (marks || []).forEach(m => { currentMarksByStudent[m.student_id] = m; });
 
   document.getElementById('marksTitle').textContent = `${currentTest.name} — Grade ${a.grade}-${a.section}`;
   document.getElementById('maxMarksHint').textContent = `Max marks: ${currentTest.max_marks}`;
   document.getElementById('marksBanner').innerHTML = '';
 
-  const body = document.getElementById('marksBody');
-  body.innerHTML = students.map((s, i) => {
-    const existing = marksByStudent[s.id];
-    const absent = existing?.is_absent;
-    return `
-    <tr>
-      <td class="roll-no mono">${i + 1}</td>
-      <td>${s.name}</td>
-      <td><input type="number" min="0" max="${currentTest.max_marks}" step="0.5" id="marks-${s.id}" value="${absent ? '' : (existing?.marks_obtained ?? '')}" ${absent ? 'disabled' : ''}></td>
-      <td><input type="checkbox" id="absent-${s.id}" ${absent ? 'checked' : ''} onchange="document.getElementById('marks-${s.id}').disabled=this.checked; if(this.checked) document.getElementById('marks-${s.id}').value='';"></td>
-    </tr>`;
-  }).join('');
+  renderMarksBody();
 
   // This is the "show only pickers + students" step — hide the tests list
   // while marks entry is open.
   document.getElementById('testsCard').style.display = 'none';
   document.getElementById('marksCard').style.display = 'block';
   document.getElementById('marksCard').scrollIntoView({ behavior: 'smooth' });
+}
+
+function renderMarksBody() {
+  const body = document.getElementById('marksBody');
+  body.innerHTML = currentStudents.map((s, i) => {
+    const existing = currentMarksByStudent[s.id];
+    const absent = existing?.is_absent;
+    return `
+    <tr>
+      <td class="roll-no mono">${i + 1}</td>
+      <td>${s.name}</td>
+      <td><input type="number" min="0" max="${currentTest.max_marks}" step="0.5" id="marks-${s.id}" value="${absent ? '' : (existing?.marks_obtained ?? '')}" ${absent ? 'disabled' : ''}></td>
+      <td><input type="checkbox" id="absent-${s.id}" ${absent ? 'checked' : ''} onchange="document.getElementById('marks-${s.id}').disabled=this.checked; if(this.checked){ document.getElementById('marks-${s.id}').value=''; document.getElementById('marks-${s.id}').classList.remove('invalid'); }"></td>
+    </tr>`;
+  }).join('');
+  wireMarksTableUX(currentStudents, currentTest.max_marks, 'marks', 'absent', 'marksProgress');
+}
+
+function downloadTemplate() {
+  downloadMarksTemplate(currentTest, currentStudents, currentMarksByStudent);
+}
+
+async function uploadMarksFile() {
+  const fileInput = document.getElementById('uploadMarksFile');
+  if (!fileInput.files.length) { alert('Choose a file first.'); return; }
+  let parsed;
+  try {
+    parsed = await parseMarksFile(fileInput.files[0]);
+  } catch (err) {
+    alert('Could not read that file: ' + err.message);
+    return;
+  }
+
+  let matched = 0;
+  currentStudents.forEach(s => {
+    const rec = parsed[s.id];
+    if (!rec) return;
+    matched++;
+    const markInput = document.getElementById(`marks-${s.id}`);
+    const absentInput = document.getElementById(`absent-${s.id}`);
+    if (rec.absent) {
+      absentInput.checked = true;
+      markInput.value = '';
+      markInput.disabled = true;
+      markInput.classList.remove('invalid');
+    } else {
+      absentInput.checked = false;
+      markInput.disabled = false;
+      markInput.value = rec.marks ?? '';
+      markInput.classList.toggle('invalid', rec.marks != null && currentTest.max_marks != null && rec.marks > currentTest.max_marks);
+    }
+  });
+  fileInput.value = '';
+  wireMarksTableUX(currentStudents, currentTest.max_marks, 'marks', 'absent', 'marksProgress');
+  alert(`Loaded marks for ${matched} of ${currentStudents.length} students from the file. Review below, then click "Save marks".`);
 }
 
 async function submitMarks() {

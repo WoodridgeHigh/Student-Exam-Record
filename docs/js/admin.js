@@ -99,13 +99,18 @@ function classesForSubject(subjectId) {
 // ── SETUP TAB (super admin only) ─────────────────────────────────────────
 
 function renderSetupLists() {
-  document.getElementById('yearsList').innerHTML = years.map(y => `
-    <div class="test-row">
-      <div>${y.label} ${y.is_current ? '<span class="badge">Current</span>' : ''}</div>
-      ${!y.is_current ? `<button class="btn small secondary" onclick="setCurrentYear('${y.id}')">Set as current</button>` : ''}
-    </div>`).join('') || '<p class="hint">No academic years yet.</p>';
+  const yearsListEl = document.getElementById('yearsList');
+  if (yearsListEl) {
+    yearsListEl.innerHTML = years.map(y => `
+      <div class="test-row">
+        <div>${y.label} ${y.is_current ? '<span class="badge">Current</span>' : ''}</div>
+        ${!y.is_current ? `<button class="btn small secondary" onclick="setCurrentYear('${y.id}')">Set as current</button>` : ''}
+      </div>`).join('') || '<p class="hint">No academic years yet.</p>';
+  }
 
-  document.getElementById('subjectsList').innerHTML = subjects.map(s => `
+  const subjectsListEl = document.getElementById('subjectsList');
+  if (subjectsListEl) {
+    subjectsListEl.innerHTML = subjects.map(s => `
     <div class="test-row">
       <div>${s.name} <span class="hint">(${classesForSubject(s.id).join(', ') || 'no classes assigned'})</span></div>
       <div style="display:flex; gap:6px;">
@@ -115,6 +120,7 @@ function renderSetupLists() {
     </div>
     <div id="editSubjectPanel-${s.id}" style="display:none; padding:10px 0;"></div>
   `).join('') || '<p class="hint">No subjects yet.</p>';
+  }
 
   renderCheckGrid('newSubjectGrades', 'newSubjectSections', 'multi');
 }
@@ -249,7 +255,7 @@ async function toggleLock(testId, lock) {
 
 // ── TESTS & MARKS TAB ────────────────────────────────────────────────────
 
-let adminCurrentTests = [], adminCurrentTest = null, adminCurrentStudents = [], adminEditingTestId = null;
+let adminCurrentTests = [], adminCurrentTest = null, adminCurrentStudents = [], adminEditingTestId = null, adminCurrentMarksByStudent = {};
 
 function tmSectionsForGrade(grade) {
   return [...new Set(subjectClasses.filter(c => c.grade === grade).map(c => c.section))].sort();
@@ -377,24 +383,70 @@ async function openAdminMarksEntry(testId) {
   adminCurrentStudents = students;
 
   const { data: marks } = await sb.from('marks').select('student_id, marks_obtained, is_absent').eq('test_id', testId);
-  const marksByStudent = {};
-  (marks || []).forEach(m => { marksByStudent[m.student_id] = m; });
+  adminCurrentMarksByStudent = {};
+  (marks || []).forEach(m => { adminCurrentMarksByStudent[m.student_id] = m; });
 
   document.getElementById('adminMarksTitle').textContent = `${adminCurrentTest.name} — Grade ${adminCurrentTest.grade}-${adminCurrentTest.section} (max ${adminCurrentTest.max_marks})`;
   document.getElementById('adminMarksBanner').innerHTML = '';
-  document.getElementById('adminMarksBody').innerHTML = students.map((s, i) => {
-    const existing = marksByStudent[s.id];
+
+  renderAdminMarksBody();
+
+  document.getElementById('adminMarksCard').style.display = 'block';
+  document.getElementById('adminMarksCard').scrollIntoView({ behavior: 'smooth' });
+}
+
+function renderAdminMarksBody() {
+  document.getElementById('adminMarksBody').innerHTML = adminCurrentStudents.map((s, i) => {
+    const existing = adminCurrentMarksByStudent[s.id];
     const absent = existing?.is_absent;
     return `
     <tr>
       <td class="roll-no mono">${i + 1}</td>
       <td>${s.name}</td>
       <td><input type="number" min="0" max="${adminCurrentTest.max_marks}" step="0.5" id="amarks-${s.id}" value="${absent ? '' : (existing?.marks_obtained ?? '')}" ${absent ? 'disabled' : ''}></td>
-      <td><label style="font-size:0.8rem;"><input type="checkbox" id="aabsent-${s.id}" ${absent ? 'checked' : ''} onchange="document.getElementById('amarks-${s.id}').disabled=this.checked; if(this.checked) document.getElementById('amarks-${s.id}').value='';"> Absent</label></td>
+      <td><input type="checkbox" id="aabsent-${s.id}" ${absent ? 'checked' : ''} onchange="document.getElementById('amarks-${s.id}').disabled=this.checked; if(this.checked){ document.getElementById('amarks-${s.id}').value=''; document.getElementById('amarks-${s.id}').classList.remove('invalid'); }"></td>
     </tr>`;
   }).join('');
-  document.getElementById('adminMarksCard').style.display = 'block';
-  document.getElementById('adminMarksCard').scrollIntoView({ behavior: 'smooth' });
+  wireMarksTableUX(adminCurrentStudents, adminCurrentTest.max_marks, 'amarks', 'aabsent', 'adminMarksProgress');
+}
+
+function downloadAdminTemplate() {
+  downloadMarksTemplate(adminCurrentTest, adminCurrentStudents, adminCurrentMarksByStudent);
+}
+
+async function uploadAdminMarksFile() {
+  const fileInput = document.getElementById('uploadAdminMarksFile');
+  if (!fileInput.files.length) { alert('Choose a file first.'); return; }
+  let parsed;
+  try {
+    parsed = await parseMarksFile(fileInput.files[0]);
+  } catch (err) {
+    alert('Could not read that file: ' + err.message);
+    return;
+  }
+
+  let matched = 0;
+  adminCurrentStudents.forEach(s => {
+    const rec = parsed[s.id];
+    if (!rec) return;
+    matched++;
+    const markInput = document.getElementById(`amarks-${s.id}`);
+    const absentInput = document.getElementById(`aabsent-${s.id}`);
+    if (rec.absent) {
+      absentInput.checked = true;
+      markInput.value = '';
+      markInput.disabled = true;
+      markInput.classList.remove('invalid');
+    } else {
+      absentInput.checked = false;
+      markInput.disabled = false;
+      markInput.value = rec.marks ?? '';
+      markInput.classList.toggle('invalid', rec.marks != null && adminCurrentTest.max_marks != null && rec.marks > adminCurrentTest.max_marks);
+    }
+  });
+  fileInput.value = '';
+  wireMarksTableUX(adminCurrentStudents, adminCurrentTest.max_marks, 'amarks', 'aabsent', 'adminMarksProgress');
+  alert(`Loaded marks for ${matched} of ${adminCurrentStudents.length} students from the file. Review below, then click "Save marks".`);
 }
 
 async function submitAdminMarks() {
@@ -730,13 +782,23 @@ window.onload = async () => {
 
   renderCheckGrid('ptGradeChecks', 'ptSectionChecks', 'multi');
 
-  await loadSharedData();
-  await loadCurrentYear();
-
+  // Grade is static (6/7/8) — populate it immediately so the picker is
+  // never blank even if the data load below fails for some reason.
   populateTmGrade();
   document.getElementById('tmGrade').addEventListener('change', populateTmSection);
   document.getElementById('tmSection').addEventListener('change', populateTmSubject);
   document.getElementById('tmSubject').addEventListener('change', () => { adminEditingTestId = null; document.getElementById('adminMarksCard').style.display = 'none'; loadAdminTests(); });
+
+  try {
+    await loadSharedData();
+    await loadCurrentYear();
+  } catch (err) {
+    console.error('Failed to load shared data:', err);
+    alert('Some setup data failed to load (' + err.message + '). Try refreshing the page — if it keeps happening, check the browser console for details.');
+  }
+  // Re-run now that subjects/subjectClasses are loaded, so Section and
+  // Subject reflect real data (harmless no-op if loadSharedData failed).
+  populateTmSection();
 
   showTab(isSuperAdmin ? 'setup' : 'testsmarks');
 };

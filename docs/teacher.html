@@ -59,7 +59,16 @@
       <h3 id="marksTitle"></h3>
       <button class="link" onclick="backToTests()">← Back to tests</button>
     </div>
-    <div class="summary-bar"><span class="hint" id="maxMarksHint"></span></div>
+    <div class="form-row">
+      <button class="btn small secondary" onclick="downloadTemplate()">Download template (Excel)</button>
+      <input type="file" id="uploadMarksFile" accept=".xlsx,.xls,.csv" style="max-width:200px;">
+      <button class="btn small secondary" onclick="uploadMarksFile()">Load from file</button>
+    </div>
+    <div class="summary-bar">
+      <span class="hint" id="maxMarksHint"></span>
+      <span class="pill present" id="marksProgress"></span>
+    </div>
+    <p class="hint">Tip: press Enter after typing a mark to jump to the next student.</p>
     <table class="roll" id="marksTable">
       <thead><tr><th style="width:50px;">#</th><th>Student</th><th style="width:110px;">Marks</th><th style="width:80px;">Absent</th></tr></thead>
       <tbody id="marksBody"></tbody>
@@ -70,6 +79,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="js/config.js"></script>
 <script src="js/supabaseClient.js"></script>
 <script src="js/teacher.js"></script>

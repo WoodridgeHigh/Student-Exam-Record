@@ -1,6 +1,6 @@
 // Fill these in after you create your Supabase project. See README.md.
 const CONFIG = {
-  SUPABASE_URL: 'https://jmjiongaxbmzwpnotndw.supabase.co',
-  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptamlvbmdheGJtendwbm90bmR3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY1MzYzOTMsImV4cCI6MjEwMjExMjM5M30.8dz0jvce8ZD1kzAA2pfGq3vqmEmV7sWTrtaxy60A6fk',
-  SCHOOL_NAME: 'Woodridge High'
+  SUPABASE_URL: 'https://PASTE_YOUR_PROJECT_REF.supabase.co',
+  SUPABASE_ANON_KEY: 'PASTE_YOUR_ANON_PUBLIC_KEY_HERE',
+  SCHOOL_NAME: 'Your School Name'
 };

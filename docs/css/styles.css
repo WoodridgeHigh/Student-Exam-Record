@@ -137,6 +137,10 @@ table.roll th {
   color: var(--ink-soft);
   border-bottom: 2px solid var(--ink);
   padding: 8px 6px;
+  position: sticky;
+  top: 0;
+  background: #FFFDF8;
+  z-index: 2;
 }
 table.roll td {
   padding: 10px 6px;
@@ -269,3 +273,9 @@ textarea.template {
 .empty-state { text-align: center; padding: 30px; color: var(--ink-soft); }
 
 input[type="file"] { font-family: inherit; }
+
+/* Marks entry: live validation + progress feedback */
+input.invalid {
+  border-color: var(--absent) !important;
+  background: var(--absent-bg);
+}
