@@ -26,12 +26,11 @@ table names don't collide) or use a fresh one — either is fine.
 
 **New project:** SQL Editor → paste in the entire contents of `supabase/schema.sql` → **Run**.
 
-**Existing project (you already ran schema.sql before):** instead, run
-`supabase/migrations/002_role_restructure_and_subject_classes.sql` — this
-adds what changed (subject→class mapping, absent marking, updated
-permissions) without touching any data you've already entered. See
-"What changed in migration 002" near the bottom of this file for the full
-list of behavior changes it brings.
+**Existing project (you already ran schema.sql before):** instead, run the
+migration files in `supabase/migrations/` **in order** — `002...` then
+`003...`. Each adds what changed without touching data you've already
+entered. See "What changed" near the bottom of this file for details on
+each.
 
 This creates: `profiles`, `subjects`, `subject_classes`, `houses`,
 `academic_years`, `teacher_assignments`, `field_definitions`, `students`,
@@ -219,6 +218,21 @@ marks is `set_pt_max_marks()`, and only admin/super admin can call it, and
 only while `is_locked = false`. This is enforced in the database function
 itself, not just hidden in the UI, so it holds even if someone calls the
 API directly.
+
+---
+
+## What changed in migration 003
+
+9. **Custom tests can now be deleted** (predefined PT-1..4 still never can
+   be) — by whoever's already allowed to edit them: the super admin/admin,
+   or a teacher for their own assigned subject+class. Deleting a test
+   removes its marks too, with a confirmation prompt first.
+10. **Editing a test now uses an inline form** instead of browser prompt
+    dialogs, in both the admin and teacher pages — click Edit, the row
+    turns into a name + max-marks form with Save/Cancel, no popups.
+11. **Teachers can now edit and delete their own custom tests directly**
+    (previously this was admin-only in the UI, though the underlying
+    permission already existed).
 
 ---
 

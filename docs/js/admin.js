@@ -1,4 +1,4 @@
-let profile, subjects = [], subjectClasses = [], houses = [], years = [], fieldDefs = [], pendingAssignments = [];
+let profile, subjects = [], subjectClasses = [], houses = [], years = [], fieldDefs = [], pendingAssignments = [], currentYearId = null;
 
 const GRADE_LIST = ['6', '7', '8'];
 const SECTION_LIST = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
@@ -81,7 +81,7 @@ async function loadSharedData() {
   const houseOptions = houses.map(h => `<option value="${h.id}">${h.name}</option>`).join('');
 
   ['ptSubject', 'tmSubject', 'assignSubject'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = subjectOptions; });
-  ['ptYear', 'tmYear', 'repYear'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = yearOptions; });
+  ['ptYear', 'repYear'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = yearOptions; });
   const repSubjectEl = document.getElementById('repSubject');
   if (repSubjectEl) repSubjectEl.innerHTML = '<option value="">Any subject</option>' + subjectOptions;
   const stuHouseEl = document.getElementById('stuHouse');
@@ -191,6 +191,7 @@ async function setCurrentYear(yearId) {
   const { error } = await sb.from('academic_years').update({ is_current: true }).eq('id', yearId);
   if (error) { alert(error.message); return; }
   await loadSharedData();
+  await loadCurrentYear();
 }
 
 async function initializeYear() {
@@ -248,67 +249,123 @@ async function toggleLock(testId, lock) {
 
 // ── TESTS & MARKS TAB ────────────────────────────────────────────────────
 
-let adminCurrentTests = [], adminCurrentTest = null, adminCurrentStudents = [];
+let adminCurrentTests = [], adminCurrentTest = null, adminCurrentStudents = [], adminEditingTestId = null;
+
+function tmSectionsForGrade(grade) {
+  return [...new Set(subjectClasses.filter(c => c.grade === grade).map(c => c.section))].sort();
+}
+function tmSubjectsForGradeSection(grade, section) {
+  const ids = new Set(subjectClasses.filter(c => c.grade === grade && c.section === section).map(c => c.subject_id));
+  return subjects.filter(s => ids.has(s.id));
+}
+
+function populateTmGrade() {
+  document.getElementById('tmGrade').innerHTML = GRADE_LIST.map(g => `<option value="${g}">${g}</option>`).join('');
+  populateTmSection();
+}
+function populateTmSection() {
+  const grade = document.getElementById('tmGrade').value;
+  const sections = tmSectionsForGrade(grade);
+  document.getElementById('tmSection').innerHTML = sections.map(s => `<option value="${s}">${s}</option>`).join('');
+  populateTmSubject();
+}
+function populateTmSubject() {
+  const grade = document.getElementById('tmGrade').value;
+  const section = document.getElementById('tmSection').value;
+  const subs = tmSubjectsForGradeSection(grade, section);
+  document.getElementById('tmSubject').innerHTML = subs.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+  adminEditingTestId = null;
+  document.getElementById('adminMarksCard').style.display = 'none';
+  loadAdminTests();
+}
 
 async function loadAdminTests() {
-  const year = document.getElementById('tmYear').value;
+  const grade = document.getElementById('tmGrade').value;
+  const section = document.getElementById('tmSection').value;
   const subject = document.getElementById('tmSubject').value;
-  const grades = getChecked('tmGradeChecks');
-  const sections = getChecked('tmSectionChecks');
-  document.getElementById('adminMarksCard').style.display = 'none';
   const listEl = document.getElementById('adminTestList');
 
-  if (!year || !subject) { listEl.innerHTML = '<p class="hint">Pick a year and subject.</p>'; return; }
-  if (!grades.length || !sections.length) { listEl.innerHTML = '<p class="hint">Check at least one grade and one section.</p>'; return; }
+  if (!grade || !section || !subject) { listEl.innerHTML = '<p class="hint">No subjects have been assigned to this class yet.</p>'; return; }
+  if (!currentYearId) { listEl.innerHTML = '<p class="hint">No current academic year is set (Setup tab).</p>'; return; }
 
   const { data, error } = await sb.from('tests').select('*')
-    .eq('academic_year_id', year).eq('subject_id', subject).in('grade', grades).in('section', sections)
-    .order('grade').order('section').order('is_predefined', { ascending: false }).order('pt_number').order('name');
+    .eq('academic_year_id', currentYearId).eq('subject_id', subject).eq('grade', grade).eq('section', section)
+    .order('is_predefined', { ascending: false }).order('pt_number').order('name');
   if (error) { listEl.innerHTML = `<div class="status-banner warn">${error.message}</div>`; return; }
 
   adminCurrentTests = data;
-  if (!data.length) { listEl.innerHTML = '<div class="empty-state">No tests yet for this selection.</div>'; return; }
+  if (!data.length) { listEl.innerHTML = '<div class="empty-state">No tests yet for this class.</div>'; return; }
 
-  listEl.innerHTML = data.map(t => `
+  listEl.innerHTML = data.map(t => t.id === adminEditingTestId ? renderTestEditRow(t, 'saveAdminTestEdit', 'cancelAdminTestEdit') : renderTestRow(t, 'admin')).join('');
+}
+
+function renderTestRow(t, scope) {
+  const editFn = scope === 'admin' ? 'startAdminEditTest' : 'startEditTest';
+  const deleteFn = scope === 'admin' ? 'deleteAdminTest' : 'deleteTest';
+  const enterFn = scope === 'admin' ? 'openAdminMarksEntry' : 'openMarksEntry';
+  return `
     <div class="test-row">
-      <div>Grade ${t.grade}-${t.section} — ${t.name}${t.is_predefined ? '<span class="badge">Predefined</span>' : ''}${t.is_locked ? '<span class="badge">Locked</span>' : ''}
+      <div>${t.name}${t.is_predefined ? '<span class="badge">Predefined</span>' : ''}${t.is_locked ? '<span class="badge">Locked</span>' : ''}
         <div class="hint">Max marks: ${t.max_marks ?? '— not set'}</div>
       </div>
       <div style="display:flex; gap:6px;">
-        ${!t.is_predefined ? `<button class="btn small secondary" onclick="editAdminTest('${t.id}')">Edit</button>` : ''}
-        <button class="btn small secondary" onclick="openAdminMarksEntry('${t.id}')" ${t.max_marks == null ? 'disabled' : ''}>Enter marks</button>
+        ${!t.is_predefined ? `
+          <button class="btn small secondary" onclick="${editFn}('${t.id}')">Edit</button>
+          <button class="btn small secondary" onclick="${deleteFn}('${t.id}')">Delete</button>` : ''}
+        <button class="btn small secondary" onclick="${enterFn}('${t.id}')" ${t.max_marks == null ? 'disabled' : ''}>Enter marks</button>
       </div>
-    </div>`).join('');
+    </div>`;
+}
+
+function renderTestEditRow(t, saveFn, cancelFn) {
+  return `
+    <div class="test-row" style="flex-direction:column; align-items:stretch; gap:8px;">
+      <div class="form-row">
+        <input id="editTestName-${t.id}" value="${t.name}" placeholder="Test name">
+        <input id="editTestMax-${t.id}" type="number" value="${t.max_marks ?? ''}" placeholder="Max marks">
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button class="btn small" onclick="${saveFn}('${t.id}')">Save</button>
+        <button class="btn small secondary" onclick="${cancelFn}()">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function startAdminEditTest(testId) { adminEditingTestId = testId; loadAdminTests(); }
+function cancelAdminTestEdit() { adminEditingTestId = null; loadAdminTests(); }
+
+async function saveAdminTestEdit(testId) {
+  const name = document.getElementById(`editTestName-${testId}`).value.trim();
+  const maxMarks = parseFloat(document.getElementById(`editTestMax-${testId}`).value);
+  if (!name || isNaN(maxMarks)) { alert('Enter a name and max marks'); return; }
+  const { error } = await sb.rpc('update_test', { p_test_id: testId, p_name: name, p_max_marks: maxMarks });
+  if (error) { alert(error.message); return; }
+  adminEditingTestId = null;
+  loadAdminTests();
+}
+
+async function deleteAdminTest(testId) {
+  const t = adminCurrentTests.find(x => x.id === testId);
+  if (!window.confirm(`Delete test "${t.name}"? This permanently deletes all marks entered for it. This cannot be undone.`)) return;
+  const { error } = await sb.rpc('delete_test', { p_test_id: testId });
+  if (error) { alert(error.message); return; }
+  loadAdminTests();
 }
 
 async function createAdminTest() {
   const name = document.getElementById('newTestName').value.trim();
   const maxMarks = parseFloat(document.getElementById('newTestMax').value);
-  const grades = getChecked('tmGradeChecks');
-  const sections = getChecked('tmSectionChecks');
   if (!name || !maxMarks) { alert('Enter a test name and max marks'); return; }
-  if (grades.length !== 1 || sections.length !== 1) { alert('Check exactly one grade and one section above before creating a test — a test belongs to a single class.'); return; }
 
   const { error } = await sb.rpc('create_test', {
     p_name: name, p_subject_id: document.getElementById('tmSubject').value,
-    p_grade: grades[0], p_section: sections[0],
-    p_academic_year_id: document.getElementById('tmYear').value, p_max_marks: maxMarks
+    p_grade: document.getElementById('tmGrade').value, p_section: document.getElementById('tmSection').value,
+    p_academic_year_id: currentYearId, p_max_marks: maxMarks
   });
   if (error) { alert(error.message); return; }
   document.getElementById('newTestForm').style.display = 'none';
   document.getElementById('newTestName').value = '';
   document.getElementById('newTestMax').value = '';
-  loadAdminTests();
-}
-
-async function editAdminTest(testId) {
-  const t = adminCurrentTests.find(x => x.id === testId);
-  const name = window.prompt('Test name:', t.name);
-  if (!name) return;
-  const maxMarks = parseFloat(window.prompt('Max marks:', t.max_marks));
-  if (isNaN(maxMarks)) return;
-  const { error } = await sb.rpc('update_test', { p_test_id: testId, p_name: name, p_max_marks: maxMarks });
-  if (error) { alert(error.message); return; }
   loadAdminTests();
 }
 
@@ -672,9 +729,19 @@ window.onload = async () => {
   }
 
   renderCheckGrid('ptGradeChecks', 'ptSectionChecks', 'multi');
-  renderCheckGrid('tmGradeChecks', 'tmSectionChecks', isSuperAdmin ? 'multi' : 'single');
 
   await loadSharedData();
+  await loadCurrentYear();
+
+  populateTmGrade();
+  document.getElementById('tmGrade').addEventListener('change', populateTmSection);
+  document.getElementById('tmSection').addEventListener('change', populateTmSubject);
+  document.getElementById('tmSubject').addEventListener('change', () => { adminEditingTestId = null; document.getElementById('adminMarksCard').style.display = 'none'; loadAdminTests(); });
 
   showTab(isSuperAdmin ? 'setup' : 'testsmarks');
 };
+
+async function loadCurrentYear() {
+  const { data, error } = await sb.from('academic_years').select('id, label').eq('is_current', true).maybeSingle();
+  currentYearId = (!error && data) ? data.id : null;
+}

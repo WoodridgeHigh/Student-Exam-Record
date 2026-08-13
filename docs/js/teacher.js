@@ -104,6 +104,8 @@ async function createTest() {
   loadTests();
 }
 
+let editingTestId = null;
+
 async function loadTests() {
   const a = currentAssignment();
   if (!a || !currentYearId) return;
@@ -117,16 +119,61 @@ async function loadTests() {
   const listEl = document.getElementById('testList');
   if (!data.length) { listEl.innerHTML = '<div class="empty-state">No tests yet for this class/subject.</div>'; return; }
 
-  listEl.innerHTML = data.map(t => `
+  listEl.innerHTML = data.map(t => t.id === editingTestId ? renderTestEditRow(t) : renderTestRow(t)).join('');
+}
+
+function renderTestRow(t) {
+  return `
     <div class="test-row">
       <div>${t.name}${t.is_predefined ? '<span class="badge">Predefined</span>' : ''}${t.is_locked ? '<span class="badge">Locked</span>' : ''}
         <div class="hint">Max marks: ${t.max_marks ?? '— not set yet'}</div>
       </div>
-      <button class="btn small secondary" onclick="openMarksEntry('${t.id}')" ${t.max_marks == null ? 'disabled title="Max marks not set yet"' : ''}>Enter marks</button>
-    </div>`).join('');
+      <div style="display:flex; gap:6px;">
+        ${!t.is_predefined ? `
+          <button class="btn small secondary" onclick="startEditTest('${t.id}')">Edit</button>
+          <button class="btn small secondary" onclick="deleteTest('${t.id}')">Delete</button>` : ''}
+        <button class="btn small secondary" onclick="openMarksEntry('${t.id}')" ${t.max_marks == null ? 'disabled title="Max marks not set yet"' : ''}>Enter marks</button>
+      </div>
+    </div>`;
+}
+
+function renderTestEditRow(t) {
+  return `
+    <div class="test-row" style="flex-direction:column; align-items:stretch; gap:8px;">
+      <div class="form-row">
+        <input id="editTestName-${t.id}" value="${t.name}" placeholder="Test name">
+        <input id="editTestMax-${t.id}" type="number" value="${t.max_marks ?? ''}" placeholder="Max marks">
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button class="btn small" onclick="saveTestEdit('${t.id}')">Save</button>
+        <button class="btn small secondary" onclick="cancelTestEdit()">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function startEditTest(testId) { editingTestId = testId; loadTests(); }
+function cancelTestEdit() { editingTestId = null; loadTests(); }
+
+async function saveTestEdit(testId) {
+  const name = document.getElementById(`editTestName-${testId}`).value.trim();
+  const maxMarks = parseFloat(document.getElementById(`editTestMax-${testId}`).value);
+  if (!name || isNaN(maxMarks)) { alert('Enter a name and max marks'); return; }
+  const { error } = await sb.rpc('update_test', { p_test_id: testId, p_name: name, p_max_marks: maxMarks });
+  if (error) { alert(error.message); return; }
+  editingTestId = null;
+  loadTests();
+}
+
+async function deleteTest(testId) {
+  const t = currentTests.find(x => x.id === testId);
+  if (!window.confirm(`Delete test "${t.name}"? This permanently deletes all marks entered for it. This cannot be undone.`)) return;
+  const { error } = await sb.rpc('delete_test', { p_test_id: testId });
+  if (error) { alert(error.message); return; }
+  loadTests();
 }
 
 function backToTests() {
+  editingTestId = null;
   document.getElementById('marksCard').style.display = 'none';
   document.getElementById('testsCard').style.display = 'block';
 }
